@@ -34,6 +34,7 @@ struct MapTabView: View {
     @State private var isSheetExpanded = true
     @State private var shouldShowLoadingSheet = true
     @State private var sheetDragTranslation: CGFloat = 0
+    @State private var kakaoPlaceIDToShow: String?
 
     private let brandRed = Color(red: 0.91, green: 0.29, blue: 0.29)
     private let textDark = Color(red: 0.16, green: 0.21, blue: 0.28)
@@ -51,7 +52,8 @@ struct MapTabView: View {
                     center: mapCenter,
                     radiusMeters: viewModel.radiusMeters,
                     storeMarkers: tab == .store ? filteredStores : [],
-                    onStoreTap: handleStoreTap
+                    onStoreTap: handleStoreTap,
+                    onMapTap: handleMapBackgroundTap
                 )
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .ignoresSafeArea()
@@ -105,6 +107,16 @@ struct MapTabView: View {
             Button("확인") { viewModel.alertMessage = nil }
         } message: {
             Text(viewModel.alertMessage ?? "")
+        }
+        .sheet(isPresented: Binding(
+            get: { kakaoPlaceIDToShow != nil },
+            set: { if !$0 { kakaoPlaceIDToShow = nil } }
+        )) {
+            if let placeId = kakaoPlaceIDToShow {
+                KakaoPlaceDetailView(placeId: placeId)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
         }
     }
 
@@ -212,22 +224,13 @@ struct MapTabView: View {
         )
 
         return VStack(alignment: .leading, spacing: 0) {
-            Capsule()
-                .fill(Color(red: 0.82, green: 0.86, blue: 0.90))
-                .frame(width: 62, height: 8)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 12)
-                .onTapGesture {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
-                        isSheetExpanded.toggle()
-                    }
-                }
-
-            Text(sheetTitle)
-                .font(.system(size: 18, weight: .heavy))
-                .foregroundStyle(textMuted)
-                .padding(.top, 22)
-                .padding(.horizontal, 24)
+            if shouldShowSheetTitle {
+                Text(sheetTitle)
+                    .font(.system(size: 18, weight: .heavy))
+                    .foregroundStyle(textMuted)
+                    .padding(.top, 38)
+                    .padding(.horizontal, 24)
+            }
 
             if viewModel.isLoading {
                 VStack(alignment: .leading, spacing: 24) {
@@ -268,15 +271,15 @@ struct MapTabView: View {
                                     onTap: { handleStoreTap(selectedStoreCard.store.id) },
                                     onMoreTap: { openStoreDetail(selectedStoreCard.store) }
                                 )
-                            }
-
-                            ForEach(storeListCards, id: \.id) { store in
-                                StoreBottomCard(
-                                    store: store,
-                                    distanceText: storeDistanceText(for: store),
-                                    onTap: { handleStoreTap(store.id) },
-                                    onMoreTap: { openStoreDetail(store) }
-                                )
+                            } else {
+                                ForEach(storeListCards, id: \.id) { store in
+                                    StoreBottomCard(
+                                        store: store,
+                                        distanceText: storeDistanceText(for: store),
+                                        onTap: { handleStoreTap(store.id) },
+                                        onMoreTap: { openStoreDetail(store) }
+                                    )
+                                }
                             }
                         } else {
                             ForEach(listItems, id: \.id) { item in
@@ -336,6 +339,22 @@ struct MapTabView: View {
         .frame(height: baseHeight)
         .background(.white, in: TopRoundedRectangle(radius: 28))
         .shadow(color: .black.opacity(0.08), radius: 18, y: -6)
+        .overlay(alignment: .top) {
+            Capsule()
+                .fill(Color(red: 0.82, green: 0.86, blue: 0.90))
+                .frame(width: 62, height: 8)
+                .padding(.top, 12)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                        if isSheetExpanded {
+                            collapseSheet()
+                        } else {
+                            isSheetExpanded = true
+                        }
+                    }
+                }
+        }
         .clipped()
         .offset(y: currentOffset)
         .gesture(
@@ -347,7 +366,7 @@ struct MapTabView: View {
                     guard maxCollapsedOffset > 0 else { return }
                     withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
                         if value.translation.height > 44 {
-                            isSheetExpanded = false
+                            collapseSheet()
                         } else if value.translation.height < -44 {
                             isSheetExpanded = true
                         }
@@ -363,6 +382,13 @@ struct MapTabView: View {
         case .taxi, .daeri: return "주변 기사 목록"
         case .mypage: return ""
         }
+    }
+
+    private var shouldShowSheetTitle: Bool {
+        if isSelectedStoreSheet {
+            return false
+        }
+        return true
     }
 
     private var emptyStateText: String {
@@ -409,6 +435,10 @@ struct MapTabView: View {
             return min(300, maxExpandedHeight)
         }
 
+        if isSelectedStoreSheet {
+            return min(maxExpandedHeight, 500)
+        }
+
         let hasData = sheetItemCount > 0
         if hasData {
             return maxExpandedHeight
@@ -419,6 +449,10 @@ struct MapTabView: View {
     private func collapsedSheetVisibleHeight(baseHeight: CGFloat) -> CGFloat {
         if viewModel.isLoading {
             return baseHeight
+        }
+
+        if isSelectedStoreSheet {
+            return 34
         }
 
         if sheetItemCount > 0 {
@@ -496,11 +530,23 @@ struct MapTabView: View {
         viewModel.selectStore(store)
         withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
             isSheetExpanded = true
+            sheetDragTranslation = 0
+        }
+    }
+
+    private func handleMapBackgroundTap() {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+            collapseSheet()
         }
     }
 
     private func openStoreDetail(_ store: StoreMarker) {
         viewModel.selectStore(store)
+        collapseSheet()
+        if !store.kakaoStoreRegId.isEmpty {
+            kakaoPlaceIDToShow = store.kakaoStoreRegId
+            return
+        }
         if let url = kakaoStoreURL(for: store) {
             openURL(url)
         }
@@ -517,12 +563,20 @@ struct MapTabView: View {
         return (store, storeDistanceText(for: store))
     }
 
+    private var isSelectedStoreSheet: Bool {
+        tab == .store && selectedStoreCard != nil
+    }
+
     private var storeListCards: [StoreMarker] {
-        let stores = Array(filteredStores.prefix(8))
-        guard case let .store(selectedStore) = viewModel.selected else {
-            return stores
+        Array(filteredStores.prefix(8))
+    }
+
+    private func collapseSheet() {
+        isSheetExpanded = false
+        sheetDragTranslation = 0
+        if isSelectedStoreSheet {
+            viewModel.clearSelection()
         }
-        return stores.filter { $0.id != selectedStore.id }
     }
 
     private func kakaoStoreURL(for store: StoreMarker) -> URL? {

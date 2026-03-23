@@ -7,6 +7,7 @@ struct KakaoMapContainerView: UIViewRepresentable {
     let radiusMeters: Int
     let storeMarkers: [StoreMarker]
     let onStoreTap: (String) -> Void
+    let onMapTap: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -23,7 +24,8 @@ struct KakaoMapContainerView: UIViewRepresentable {
             center: center,
             radiusMeters: radiusMeters,
             storeMarkers: storeMarkers,
-            onStoreTap: onStoreTap
+            onStoreTap: onStoreTap,
+            onMapTap: onMapTap
         )
     }
 
@@ -38,6 +40,7 @@ struct KakaoMapContainerView: UIViewRepresentable {
         private var currentRadiusMeters: Int = 500
         private var currentStoreMarkers: [StoreMarker] = []
         private var onStoreTap: ((String) -> Void)?
+        private var onMapTap: (() -> Void)?
         private var hasMovedCameraInitially = false
         private var lastCameraCenter: LatLng?
         private var lastCameraRadiusMeters: Int?
@@ -45,6 +48,7 @@ struct KakaoMapContainerView: UIViewRepresentable {
         private var lastRenderedRadiusMeters: Int?
         private var lastRenderedStoreMarkers: [StoreMarker] = []
         private var poiTapHandler: (any DisposableEventHandler)?
+        private var mapTapHandler: (any DisposableEventHandler)?
 
         private let viewName = "500m_map"
         private let labelLayerID = "user_marker_layer"
@@ -99,7 +103,13 @@ struct KakaoMapContainerView: UIViewRepresentable {
             self.controller = controller
         }
 
-        func update(center: LatLng?, radiusMeters: Int, storeMarkers: [StoreMarker], onStoreTap: @escaping (String) -> Void) {
+        func update(
+            center: LatLng?,
+            radiusMeters: Int,
+            storeMarkers: [StoreMarker],
+            onStoreTap: @escaping (String) -> Void,
+            onMapTap: @escaping () -> Void
+        ) {
             let didCenterChange = center != currentCenter
             let didRadiusChange = radiusMeters != currentRadiusMeters
             let didStoreMarkersChange = storeMarkers != currentStoreMarkers
@@ -108,6 +118,7 @@ struct KakaoMapContainerView: UIViewRepresentable {
             currentRadiusMeters = radiusMeters
             currentStoreMarkers = storeMarkers
             self.onStoreTap = onStoreTap
+            self.onMapTap = onMapTap
 
             if didCenterChange || didRadiusChange {
                 moveCameraIfNeeded()
@@ -135,6 +146,7 @@ struct KakaoMapContainerView: UIViewRepresentable {
             configureLayersIfNeeded()
             configureStylesIfNeeded()
             configureTapHandlerIfNeeded()
+            configureMapTapHandlerIfNeeded()
             moveCameraIfPossible(force: true)
             renderMapObjectsIfNeeded(force: true)
         }
@@ -218,7 +230,20 @@ struct KakaoMapContainerView: UIViewRepresentable {
                 { event in
                     guard event.poiID.hasPrefix("store_") else { return }
                     let storeID = String(event.poiID.dropFirst("store_".count))
-                    owner.onStoreTap?(storeID)
+                    DispatchQueue.main.async {
+                        owner.onStoreTap?(storeID)
+                    }
+                }
+            }
+        }
+
+        private func configureMapTapHandlerIfNeeded() {
+            guard mapTapHandler == nil, let map = kakaoMap else { return }
+            mapTapHandler = map.addMapTappedEventHandler(target: self) { owner in
+                { _ in
+                    DispatchQueue.main.async {
+                        owner.onMapTap?()
+                    }
                 }
             }
         }
@@ -254,7 +279,7 @@ struct KakaoMapContainerView: UIViewRepresentable {
                     poiID: "store_\(store.id)"
                 )
                 option.rank = 10
-                option.clickable = false
+                option.clickable = true
                 let position = MapPoint(longitude: store.lng, latitude: store.lat)
                 let poi = labelLayer.addPoi(option: option, at: position)
                 poi?.show()
