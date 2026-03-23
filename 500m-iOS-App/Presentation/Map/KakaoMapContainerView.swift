@@ -5,6 +5,8 @@ import KakaoMapsSDK
 struct KakaoMapContainerView: UIViewRepresentable {
     let center: LatLng?
     let radiusMeters: Int
+    let storeMarkers: [StoreMarker]
+    let onStoreTap: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -17,7 +19,12 @@ struct KakaoMapContainerView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: KMViewContainer, context: Context) {
-        context.coordinator.update(center: center, radiusMeters: radiusMeters)
+        context.coordinator.update(
+            center: center,
+            radiusMeters: radiusMeters,
+            storeMarkers: storeMarkers,
+            onStoreTap: onStoreTap
+        )
     }
 
     final class Coordinator: NSObject, MapControllerDelegate {
@@ -26,18 +33,26 @@ struct KakaoMapContainerView: UIViewRepresentable {
         private var kakaoMap: KakaoMap?
         private var labelLayer: LabelLayer?
         private var shapeLayer: ShapeLayer?
-        private var userPoi: Poi?
 
         private var currentCenter: LatLng?
         private var currentRadiusMeters: Int = 500
+        private var currentStoreMarkers: [StoreMarker] = []
+        private var onStoreTap: ((String) -> Void)?
         private var hasMovedCameraInitially = false
         private var lastCameraCenter: LatLng?
         private var lastCameraRadiusMeters: Int?
+        private var lastRenderedCenter: LatLng?
+        private var lastRenderedRadiusMeters: Int?
+        private var lastRenderedStoreMarkers: [StoreMarker] = []
+        private var poiTapHandler: (any DisposableEventHandler)?
 
         private let viewName = "500m_map"
         private let labelLayerID = "user_marker_layer"
         private let shapeLayerID = "radius_shape_layer"
         private let poiStyleID = "user_location_style"
+        private let storeLifeStyleID = "store_life_style"
+        private let storeFoodStyleID = "store_food_style"
+        private let storeUrgentStyleID = "store_urgent_style"
         private let polygonStyleID = "radius_polygon_style"
         private let userPoiID = "me"
         private let radiusShapeID = "radius"
@@ -60,6 +75,19 @@ struct KakaoMapContainerView: UIViewRepresentable {
             return resizedImage(baseImage, targetSize: targetSize)
         }
 
+        private func storeMarkerImage(named assetName: String) -> UIImage? {
+            guard let baseImage = UIImage(named: assetName, in: .main, compatibleWith: nil)
+                ?? UIImage(named: assetName) else {
+                return nil
+            }
+
+            let targetSize = CGSize(
+                width: max(6, baseImage.size.width / 2),
+                height: max(6, baseImage.size.height / 2)
+            )
+            return resizedImage(baseImage, targetSize: targetSize)
+        }
+
         func attach(to container: KMViewContainer) {
             guard self.container !== container else { return }
             self.container = container
@@ -71,11 +99,23 @@ struct KakaoMapContainerView: UIViewRepresentable {
             self.controller = controller
         }
 
-        func update(center: LatLng?, radiusMeters: Int) {
+        func update(center: LatLng?, radiusMeters: Int, storeMarkers: [StoreMarker], onStoreTap: @escaping (String) -> Void) {
+            let didCenterChange = center != currentCenter
+            let didRadiusChange = radiusMeters != currentRadiusMeters
+            let didStoreMarkersChange = storeMarkers != currentStoreMarkers
+
             currentCenter = center
             currentRadiusMeters = radiusMeters
-            moveCameraIfNeeded()
-            renderUserLocationAndRadius()
+            currentStoreMarkers = storeMarkers
+            self.onStoreTap = onStoreTap
+
+            if didCenterChange || didRadiusChange {
+                moveCameraIfNeeded()
+            }
+
+            if didCenterChange || didRadiusChange || didStoreMarkersChange {
+                renderMapObjectsIfNeeded(force: false)
+            }
         }
 
         func addViews() {
@@ -94,8 +134,9 @@ struct KakaoMapContainerView: UIViewRepresentable {
             kakaoMap = controller?.getView(viewName) as? KakaoMap
             configureLayersIfNeeded()
             configureStylesIfNeeded()
+            configureTapHandlerIfNeeded()
             moveCameraIfPossible(force: true)
-            renderUserLocationAndRadius()
+            renderMapObjectsIfNeeded(force: true)
         }
 
         func containerDidResized(_ size: CGSize) { }
@@ -141,6 +182,22 @@ struct KakaoMapContainerView: UIViewRepresentable {
                 map.getLabelManager().addPoiStyle(style)
             }
 
+            addStoreStyleIfNeeded(
+                map: map,
+                styleID: storeLifeStyleID,
+                assetName: "ic_store_life"
+            )
+            addStoreStyleIfNeeded(
+                map: map,
+                styleID: storeFoodStyleID,
+                assetName: "ic_store_food"
+            )
+            addStoreStyleIfNeeded(
+                map: map,
+                styleID: storeUrgentStyleID,
+                assetName: "ic_store_urgent"
+            )
+
             let polygonStyle = PolygonStyle(
                 styles: [
                     PerLevelPolygonStyle(
@@ -155,21 +212,52 @@ struct KakaoMapContainerView: UIViewRepresentable {
             map.getShapeManager().addPolygonStyleSet(styleSet)
         }
 
-        private func renderUserLocationAndRadius() {
+        private func configureTapHandlerIfNeeded() {
+            guard poiTapHandler == nil, let map = kakaoMap else { return }
+            poiTapHandler = map.addPoisTappedEventHandler(target: self) { owner in
+                { event in
+                    guard event.poiID.hasPrefix("store_") else { return }
+                    let storeID = String(event.poiID.dropFirst("store_".count))
+                    owner.onStoreTap?(storeID)
+                }
+            }
+        }
+
+        private func renderMapObjectsIfNeeded(force: Bool) {
+            guard force
+                || currentCenter != lastRenderedCenter
+                || currentRadiusMeters != lastRenderedRadiusMeters
+                || currentStoreMarkers != lastRenderedStoreMarkers else {
+                return
+            }
+            renderMapObjects()
+        }
+
+        private func renderMapObjects() {
             guard let center = currentCenter else { return }
             guard let labelLayer, let shapeLayer else { return }
 
             let mapPoint = MapPoint(longitude: center.lng, latitude: center.lat)
+            labelLayer.clearAllItems()
 
-            if let userPoi {
-                userPoi.position = mapPoint
-                userPoi.show()
-            } else if userMarkerImage != nil {
+            if userMarkerImage != nil {
                 let option = PoiOptions(styleID: poiStyleID, poiID: userPoiID)
-                option.rank = 1
+                option.rank = 1000
                 option.clickable = false
-                userPoi = labelLayer.addPoi(option: option, at: mapPoint)
-                userPoi?.show()
+                let poi = labelLayer.addPoi(option: option, at: mapPoint)
+                poi?.show()
+            }
+
+            for store in currentStoreMarkers {
+                let option = PoiOptions(
+                    styleID: styleID(for: store.category),
+                    poiID: "store_\(store.id)"
+                )
+                option.rank = 10
+                option.clickable = false
+                let position = MapPoint(longitude: store.lng, latitude: store.lat)
+                let poi = labelLayer.addPoi(option: option, at: position)
+                poi?.show()
             }
 
             shapeLayer.removeMapPolygonShape(shapeID: radiusShapeID)
@@ -185,6 +273,35 @@ struct KakaoMapContainerView: UIViewRepresentable {
             options.polygons = [polygon]
             let shape = shapeLayer.addMapPolygonShape(options)
             shape?.show()
+
+            lastRenderedCenter = center
+            lastRenderedRadiusMeters = currentRadiusMeters
+            lastRenderedStoreMarkers = currentStoreMarkers
+        }
+
+        private func styleID(for category: String) -> String {
+            switch category {
+            case "FOOD":
+                return storeFoodStyleID
+            case "URGENT":
+                return storeUrgentStyleID
+            default:
+                return storeLifeStyleID
+            }
+        }
+
+        private func addStoreStyleIfNeeded(map: KakaoMap, styleID: String, assetName: String) {
+            guard let image = storeMarkerImage(named: assetName) else { return }
+            let icon = PoiIconStyle(
+                symbol: image,
+                anchorPoint: CGPoint(x: 0.5, y: 0.5)
+            )
+            let style = PoiStyle(
+                styleID: styleID,
+                styles: [PerLevelPoiStyle(iconStyle: icon, level: 0)]
+            )
+            map.getLabelManager().removePoiStyle(styleID)
+            map.getLabelManager().addPoiStyle(style)
         }
 
         private func moveCameraIfNeeded() {
