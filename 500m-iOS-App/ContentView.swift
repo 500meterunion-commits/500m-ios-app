@@ -1,24 +1,13 @@
-//
-//  ContentView.swift
-//  500m-iOS-App
-//
-//  Created by seon macbook on 3/10/26.
-//
-
 import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
+        AppRootView()
     }
 }
 
 #Preview {
     ContentView()
+        .environmentObject(AppContainer())
+        .environmentObject(AppSessionStore(container: AppContainer()))
 }

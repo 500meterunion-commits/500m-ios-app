@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>kakao$(KAKAO_NATIVE_APP_KEY)</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.836480875494-29vkk1p4c548ubiqbq6c82blc2j8vep1</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>FIREBASE_FUNCTIONS_REGION</key>
+	<string>asia-northeast3</string>
+	<key>GOOGLE_REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.836480875494-29vkk1p4c548ubiqbq6c82blc2j8vep1</string>
+	<key>GIDClientID</key>
+	<string>836480875494-29vkk1p4c548ubiqbq6c82blc2j8vep1.apps.googleusercontent.com</string>
+	<key>GOOGLE_IOS_CLIENT_ID</key>
+	<string>836480875494-29vkk1p4c548ubiqbq6c82blc2j8vep1.apps.googleusercontent.com</string>
+	<key>GOOGLE_WEB_CLIENT_ID</key>
+	<string>836480875494-r9v83qfmkd6fljuqn4k361oiik4ijb0d.apps.googleusercontent.com</string>
+	<key>KAKAO_FUNCTIONS_BASE_URL</key>
+	<string>https://asia-northeast3-m-ae6f5.cloudfunctions.net/</string>
+	<key>KAKAO_NATIVE_APP_KEY</key>
+	<string>8d8c073fa3d7f84fe5240f1a5fb92d98</string>
+	<key>KAKAO_REST_API_KEY</key>
+	<string>ccd8d2df694f5c16b29fb098ca369ac9</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>kakaokompassauth</string>
+		<string>kakaolink</string>
+	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>주변 기사와 매장을 찾기 위해 위치 권한이 필요합니다.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>

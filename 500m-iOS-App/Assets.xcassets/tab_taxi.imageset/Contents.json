@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "tab_taxi.pdf",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
