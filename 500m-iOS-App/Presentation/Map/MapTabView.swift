@@ -32,6 +32,7 @@ struct MapTabView: View {
     @StateObject private var viewModel: MapTabViewModel
     @State private var selectedStoreCategories = Set(StoreCategoryFilter.allCases)
     @State private var isSheetExpanded = true
+    @State private var shouldShowLoadingSheet = true
     @GestureState private var sheetDragOffset: CGFloat = 0
 
     private let brandRed = Color(red: 0.91, green: 0.29, blue: 0.29)
@@ -45,7 +46,10 @@ struct MapTabView: View {
 
     var body: some View {
         ZStack {
-            KakaoMapContainerView(center: mapCenter)
+            KakaoMapContainerView(
+                center: mapCenter,
+                radiusMeters: viewModel.radiusMeters
+            )
                 .ignoresSafeArea()
 
             radiusOverlay
@@ -53,8 +57,6 @@ struct MapTabView: View {
             if tab == .store {
                 storeCategoryRow
             }
-
-            userLocationOverlay
 
             VStack {
                 Spacer()
@@ -64,6 +66,24 @@ struct MapTabView: View {
         }
         .task {
             viewModel.configure(container: container)
+        }
+        .onChange(of: viewModel.isLoading) { isLoading in
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+                shouldShowLoadingSheet = isLoading || shouldShowEmptyState
+                if isLoading {
+                    isSheetExpanded = true
+                } else if !listItems.isEmpty {
+                    isSheetExpanded = false
+                }
+            }
+        }
+        .onChange(of: listItems.count) { itemCount in
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+                shouldShowLoadingSheet = viewModel.isLoading || itemCount == 0
+                if itemCount > 0, !viewModel.isLoading {
+                    isSheetExpanded = false
+                }
+            }
         }
         .alert("안내", isPresented: Binding(
             get: { viewModel.alertMessage != nil },
@@ -95,6 +115,10 @@ struct MapTabView: View {
     private var radiusOverlay: some View {
         VStack(spacing: 18) {
             Button {
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+                    shouldShowLoadingSheet = true
+                    isSheetExpanded = true
+                }
                 viewModel.cycleRadius()
             } label: {
                 Capsule()
@@ -162,27 +186,6 @@ struct MapTabView: View {
         }
     }
 
-    private var userLocationOverlay: some View {
-        VStack {
-            Spacer()
-            ZStack {
-                Circle()
-                    .fill(brandRed.opacity(0.12))
-                    .frame(width: radiusCircleSize, height: radiusCircleSize)
-                Circle()
-                    .stroke(brandRed.opacity(0.4), lineWidth: 2)
-                    .frame(width: radiusCircleSize, height: radiusCircleSize)
-
-                Image("ic_my_red_dot")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 28, height: 28)
-            }
-            .padding(.bottom, 290)
-        }
-        .allowsHitTesting(false)
-    }
-
     private var bottomSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
             Capsule()
@@ -202,7 +205,25 @@ struct MapTabView: View {
                 .padding(.top, 28)
                 .padding(.horizontal, 24)
 
-            if shouldShowEmptyState {
+            if viewModel.isLoading {
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack(spacing: 16) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(brandRed)
+                            .scaleEffect(1.25)
+
+                        Text(emptyStateText)
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(textMuted)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 42)
+
+                    Spacer(minLength: 0)
+                }
+            } else if shouldShowEmptyState {
                 Text(emptyStateText)
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(textMuted)
@@ -327,34 +348,28 @@ struct MapTabView: View {
     private var shouldShowEmptyState: Bool {
         switch tab {
         case .store:
-            return viewModel.isLoading || filteredStores.isEmpty
+            return filteredStores.isEmpty
         case .taxi:
-            return viewModel.isLoading || viewModel.drivers.isEmpty
+            return viewModel.drivers.isEmpty
         case .daeri:
-            return viewModel.isLoading || viewModel.drivers.isEmpty
+            return viewModel.drivers.isEmpty
         case .mypage:
             return true
         }
     }
 
     private var bottomSheetHeight: CGFloat {
-        let hasData = !viewModel.isLoading && !shouldShowEmptyState && !listItems.isEmpty
-        if hasData {
-            return isSheetExpanded ? 320 : 64
+        if viewModel.isLoading {
+            return 300
         }
-        return 320
+
+        let hasData = !shouldShowEmptyState && !listItems.isEmpty
+        if hasData {
+            return isSheetExpanded ? 320 : 34
+        }
+        return shouldShowLoadingSheet ? 300 : 118
     }
 
-    private var radiusCircleSize: CGFloat {
-        switch viewModel.radiusMeters {
-        case 100:
-            return 130
-        case 300:
-            return 210
-        default:
-            return 270
-        }
-    }
 
     private var listItems: [HomeListItem] {
         switch tab {
