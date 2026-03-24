@@ -4,36 +4,56 @@ struct MainShellView: View {
     let profile: UserProfile
 
     @State private var selectedTab: MainTab = .store
-    @State private var route: MainRoute?
+    @State private var activeMapTab: MainTab = .store
+    @State private var pushRoute: MainRoute?
+    @State private var partnerApplyMode: UserMode?
 
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottom) {
-                Group {
-                    switch selectedTab {
-                    case .store:
-                        MapTabView(tab: .store)
-                    case .taxi:
-                        MapTabView(tab: .taxi)
-                    case .daeri:
-                        MapTabView(tab: .daeri)
-                    case .mypage:
-                        MyPageView(profile: profile) { route = $0 }
+                MapTabView(selectedTab: $activeMapTab)
+                    .opacity(selectedTab == .mypage ? 0 : 1)
+                    .allowsHitTesting(selectedTab != .mypage)
+                    .ignoresSafeArea(.container, edges: .top)
+
+                if selectedTab == .mypage {
+                    Group {
+                        MyPageView(profile: profile) { route in
+                            switch route {
+                            case let .partnerApply(mode):
+                                partnerApplyMode = mode
+                            default:
+                                pushRoute = route
+                            }
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(red: 0.97, green: 0.98, blue: 0.99))
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 HomeTabBar(selectedTab: $selectedTab)
             }
-            .navigationDestination(item: $route) { route in
+            .onChange(of: selectedTab) { _, newValue in
+                if newValue != .mypage {
+                    activeMapTab = newValue
+                }
+            }
+            .navigationDestination(item: $pushRoute) { route in
                 switch route {
                 case .editProfile:
                     EditProfileView()
                 case .usageHistory:
                     UsageHistoryView()
-                case let .partnerApply(mode):
-                    PartnerApplyView(mode: mode)
+                case .terms:
+                    LegalDocumentView(title: "이용약관", content: TermsContent.service)
+                case .privacy:
+                    LegalDocumentView(title: "개인정보처리방침", content: TermsContent.partnerPrivacy)
+                case .partnerApply:
+                    EmptyView()
                 }
+            }
+            .fullScreenCover(item: $partnerApplyMode) { mode in
+                PartnerApplyView(mode: mode)
             }
         }
     }
@@ -83,12 +103,16 @@ private struct HomeTabBar: View {
 enum MainRoute: Hashable, Identifiable {
     case editProfile
     case usageHistory
+    case terms
+    case privacy
     case partnerApply(UserMode)
 
     var id: String {
         switch self {
         case .editProfile: return "editProfile"
         case .usageHistory: return "usageHistory"
+        case .terms: return "terms"
+        case .privacy: return "privacy"
         case let .partnerApply(mode): return "partnerApply_\(mode.rawValue)"
         }
     }

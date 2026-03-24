@@ -44,8 +44,44 @@ final class EditProfileViewModel: ObservableObject {
                 self.name = profile.displayName ?? ""
                 self.mode = profile.mode
                 self.remoteImageURL = profile.userProfileURL
+                Task { @MainActor [weak self] in
+                    await self?.loadPartnerProfileFields(profile: profile)
+                }
             }
             .store(in: &cancellables)
+    }
+
+    private func loadPartnerProfileFields(profile: UserProfile) async {
+        guard let container else { return }
+
+        do {
+            switch profile.mode {
+            case .partnerTaxi:
+                guard let partnerID = profile.taxiPartnerId,
+                      let driver = try await container.partnerRepository.getTaxiDriver(driverId: partnerID)
+                else { return }
+                memo = driver.memo ?? ""
+                remoteImageURL = driver.photoURL ?? profile.userProfileURL
+                if let driverName = driver.name?.nilIfBlank {
+                    name = driverName
+                }
+            case .partnerDaeri:
+                guard let partnerID = profile.daeriPartnerId,
+                      let driver = try await container.partnerRepository.getDaeriDriver(driverId: partnerID)
+                else { return }
+                memo = driver.memo ?? ""
+                remoteImageURL = driver.photoURL ?? profile.userProfileURL
+                if let driverName = driver.name?.nilIfBlank {
+                    name = driverName
+                }
+            case .general, .partnerStore:
+                memo = ""
+                remoteImageURL = profile.userProfileURL
+            }
+        } catch {
+            memo = ""
+            remoteImageURL = profile.userProfileURL
+        }
     }
 
     private func performSave(imageData: Data?) async {

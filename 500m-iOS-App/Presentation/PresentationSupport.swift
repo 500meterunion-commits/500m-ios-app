@@ -11,6 +11,10 @@ extension UserMode {
     }
 }
 
+extension UserMode: Identifiable {
+    var id: String { rawValue }
+}
+
 extension MatchRequestStatus {
     var koreanText: String {
         switch self {

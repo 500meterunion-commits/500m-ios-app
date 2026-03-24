@@ -6,7 +6,9 @@ struct KakaoMapContainerView: UIViewRepresentable {
     let center: LatLng?
     let radiusMeters: Int
     let storeMarkers: [StoreMarker]
+    let driverMarkers: [DriverMarker]
     let onStoreTap: (String) -> Void
+    let onDriverTap: (String) -> Void
     let onMapTap: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -24,7 +26,9 @@ struct KakaoMapContainerView: UIViewRepresentable {
             center: center,
             radiusMeters: radiusMeters,
             storeMarkers: storeMarkers,
+            driverMarkers: driverMarkers,
             onStoreTap: onStoreTap,
+            onDriverTap: onDriverTap,
             onMapTap: onMapTap
         )
     }
@@ -39,7 +43,9 @@ struct KakaoMapContainerView: UIViewRepresentable {
         private var currentCenter: LatLng?
         private var currentRadiusMeters: Int = 500
         private var currentStoreMarkers: [StoreMarker] = []
+        private var currentDriverMarkers: [DriverMarker] = []
         private var onStoreTap: ((String) -> Void)?
+        private var onDriverTap: ((String) -> Void)?
         private var onMapTap: (() -> Void)?
         private var hasMovedCameraInitially = false
         private var lastCameraCenter: LatLng?
@@ -47,6 +53,7 @@ struct KakaoMapContainerView: UIViewRepresentable {
         private var lastRenderedCenter: LatLng?
         private var lastRenderedRadiusMeters: Int?
         private var lastRenderedStoreMarkers: [StoreMarker] = []
+        private var lastRenderedDriverMarkers: [DriverMarker] = []
         private var poiTapHandler: (any DisposableEventHandler)?
         private var mapTapHandler: (any DisposableEventHandler)?
 
@@ -57,6 +64,8 @@ struct KakaoMapContainerView: UIViewRepresentable {
         private let storeLifeStyleID = "store_life_style"
         private let storeFoodStyleID = "store_food_style"
         private let storeUrgentStyleID = "store_urgent_style"
+        private let taxiStyleID = "taxi_marker_style"
+        private let daeriStyleID = "daeri_marker_style"
         private let polygonStyleID = "radius_polygon_style"
         private let userPoiID = "me"
         private let radiusShapeID = "radius"
@@ -92,6 +101,21 @@ struct KakaoMapContainerView: UIViewRepresentable {
             return resizedImage(baseImage, targetSize: targetSize)
         }
 
+        private func driverMarkerImage(named assetName: String) -> UIImage? {
+            guard let baseImage = UIImage(named: assetName, in: .main, compatibleWith: nil)
+                ?? UIImage(named: assetName) else {
+                return nil
+            }
+
+            let divisor: CGFloat = assetName == "ic_taxi_marker" ? 6.5 : 2
+
+            let targetSize = CGSize(
+                width: max(10, baseImage.size.width / divisor),
+                height: max(10, baseImage.size.height / divisor)
+            )
+            return resizedImage(baseImage, targetSize: targetSize)
+        }
+
         func attach(to container: KMViewContainer) {
             guard self.container !== container else { return }
             self.container = container
@@ -107,24 +131,29 @@ struct KakaoMapContainerView: UIViewRepresentable {
             center: LatLng?,
             radiusMeters: Int,
             storeMarkers: [StoreMarker],
+            driverMarkers: [DriverMarker],
             onStoreTap: @escaping (String) -> Void,
+            onDriverTap: @escaping (String) -> Void,
             onMapTap: @escaping () -> Void
         ) {
             let didCenterChange = center != currentCenter
             let didRadiusChange = radiusMeters != currentRadiusMeters
             let didStoreMarkersChange = storeMarkers != currentStoreMarkers
+            let didDriverMarkersChange = driverMarkers != currentDriverMarkers
 
             currentCenter = center
             currentRadiusMeters = radiusMeters
             currentStoreMarkers = storeMarkers
+            currentDriverMarkers = driverMarkers
             self.onStoreTap = onStoreTap
+            self.onDriverTap = onDriverTap
             self.onMapTap = onMapTap
 
             if didCenterChange || didRadiusChange {
                 moveCameraIfNeeded()
             }
 
-            if didCenterChange || didRadiusChange || didStoreMarkersChange {
+            if didCenterChange || didRadiusChange || didStoreMarkersChange || didDriverMarkersChange {
                 renderMapObjectsIfNeeded(force: false)
             }
         }
@@ -209,6 +238,8 @@ struct KakaoMapContainerView: UIViewRepresentable {
                 styleID: storeUrgentStyleID,
                 assetName: "ic_store_urgent"
             )
+            addDriverStyleIfNeeded(map: map, styleID: taxiStyleID, assetName: "ic_taxi_marker")
+            addDriverStyleIfNeeded(map: map, styleID: daeriStyleID, assetName: "ic_deari_marker")
 
             let polygonStyle = PolygonStyle(
                 styles: [
@@ -228,10 +259,14 @@ struct KakaoMapContainerView: UIViewRepresentable {
             guard poiTapHandler == nil, let map = kakaoMap else { return }
             poiTapHandler = map.addPoisTappedEventHandler(target: self) { owner in
                 { event in
-                    guard event.poiID.hasPrefix("store_") else { return }
-                    let storeID = String(event.poiID.dropFirst("store_".count))
                     DispatchQueue.main.async {
-                        owner.onStoreTap?(storeID)
+                        if event.poiID.hasPrefix("store_") {
+                            let storeID = String(event.poiID.dropFirst("store_".count))
+                            owner.onStoreTap?(storeID)
+                        } else if event.poiID.hasPrefix("driver_") {
+                            let driverID = String(event.poiID.dropFirst("driver_".count))
+                            owner.onDriverTap?(driverID)
+                        }
                     }
                 }
             }
@@ -252,7 +287,8 @@ struct KakaoMapContainerView: UIViewRepresentable {
             guard force
                 || currentCenter != lastRenderedCenter
                 || currentRadiusMeters != lastRenderedRadiusMeters
-                || currentStoreMarkers != lastRenderedStoreMarkers else {
+                || currentStoreMarkers != lastRenderedStoreMarkers
+                || currentDriverMarkers != lastRenderedDriverMarkers else {
                 return
             }
             renderMapObjects()
@@ -285,6 +321,18 @@ struct KakaoMapContainerView: UIViewRepresentable {
                 poi?.show()
             }
 
+            for driver in currentDriverMarkers {
+                let option = PoiOptions(
+                    styleID: driver.serviceType.uppercased() == "DAERI" ? daeriStyleID : taxiStyleID,
+                    poiID: "driver_\(driver.driverId)"
+                )
+                option.rank = 20
+                option.clickable = true
+                let position = MapPoint(longitude: driver.lng, latitude: driver.lat)
+                let poi = labelLayer.addPoi(option: option, at: position)
+                poi?.show()
+            }
+
             shapeLayer.removeMapPolygonShape(shapeID: radiusShapeID)
 
             let exteriorRing: [MapPoint] = Primitives.getCirclePoints(
@@ -302,6 +350,7 @@ struct KakaoMapContainerView: UIViewRepresentable {
             lastRenderedCenter = center
             lastRenderedRadiusMeters = currentRadiusMeters
             lastRenderedStoreMarkers = currentStoreMarkers
+            lastRenderedDriverMarkers = currentDriverMarkers
         }
 
         private func styleID(for category: String) -> String {
@@ -317,6 +366,20 @@ struct KakaoMapContainerView: UIViewRepresentable {
 
         private func addStoreStyleIfNeeded(map: KakaoMap, styleID: String, assetName: String) {
             guard let image = storeMarkerImage(named: assetName) else { return }
+            let icon = PoiIconStyle(
+                symbol: image,
+                anchorPoint: CGPoint(x: 0.5, y: 0.5)
+            )
+            let style = PoiStyle(
+                styleID: styleID,
+                styles: [PerLevelPoiStyle(iconStyle: icon, level: 0)]
+            )
+            map.getLabelManager().removePoiStyle(styleID)
+            map.getLabelManager().addPoiStyle(style)
+        }
+
+        private func addDriverStyleIfNeeded(map: KakaoMap, styleID: String, assetName: String) {
+            guard let image = driverMarkerImage(named: assetName) else { return }
             let icon = PoiIconStyle(
                 symbol: image,
                 anchorPoint: CGPoint(x: 0.5, y: 0.5)

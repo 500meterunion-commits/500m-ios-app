@@ -21,10 +21,13 @@ final class AppSessionStore: ObservableObject {
 
     private var authStateHandle: AuthStateDidChangeListenerHandle?
     private var profileCancellable: AnyCancellable?
+    private var fcmTokenCancellable: AnyCancellable?
     private let launchStartedAt = Date()
+    private var latestFcmToken: String?
 
     init(container: AppContainer) {
         self.container = container
+        bindFcmToken()
         bindProfileCache()
         bindAuthState()
     }
@@ -83,6 +86,20 @@ final class AppSessionStore: ObservableObject {
                     guard let self else { return }
                     let nextPhase: Phase = self.hasRequiredTerms(profile) ? .signedIn(profile) : .needsTerms(profile)
                     await self.transition(to: nextPhase)
+                    await self.registerPushTokensIfPossible(profile: profile)
+                }
+            }
+    }
+
+    private func bindFcmToken() {
+        fcmTokenCancellable = NotificationCenter.default.publisher(for: .didUpdateFcmToken)
+            .compactMap { $0.object as? String }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] token in
+                guard let self else { return }
+                latestFcmToken = token
+                Task { @MainActor [weak self] in
+                    await self?.registerPushTokensIfPossible()
                 }
             }
     }
@@ -104,6 +121,7 @@ final class AppSessionStore: ObservableObject {
             )
             let nextPhase: Phase = hasRequiredTerms(profile) ? .signedIn(profile) : .needsTerms(profile)
             await transition(to: nextPhase)
+            await registerPushTokensIfPossible(profile: profile)
         } catch {
             alertMessage = error.localizedDescription
             await transition(to: .signedOut)
@@ -127,6 +145,7 @@ final class AppSessionStore: ObservableObject {
                 )
             )
             phase = .signedIn(updated)
+            await registerPushTokensIfPossible(profile: updated)
         } catch {
             alertMessage = error.localizedDescription
         }
@@ -146,5 +165,61 @@ final class AppSessionStore: ObservableObject {
             }
         }
         phase = nextPhase
+    }
+
+    private func registerPushTokensIfPossible(profile explicitProfile: UserProfile? = nil) async {
+        guard let uid = Auth.auth().currentUser?.uid,
+              let token = latestFcmToken?.nilIfBlank else {
+            return
+        }
+
+        let profile = explicitProfile ?? currentProfile
+
+        do {
+            try await container.registerUserFcmToken(uid: uid, token: token)
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+
+        guard let profile,
+              let marketId = profile.marketId?.nilIfBlank else {
+            return
+        }
+
+        do {
+            switch profile.mode {
+            case .partnerTaxi:
+                if let driverId = profile.taxiPartnerId?.nilIfBlank {
+                    try await container.registerDriverFcmToken(
+                        driverId: driverId,
+                        token: token,
+                        marketId: marketId,
+                        serviceType: .taxi
+                    )
+                }
+            case .partnerDaeri:
+                if let driverId = profile.daeriPartnerId?.nilIfBlank {
+                    try await container.registerDriverFcmToken(
+                        driverId: driverId,
+                        token: token,
+                        marketId: marketId,
+                        serviceType: .daeri
+                    )
+                }
+            case .general, .partnerStore:
+                break
+            }
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    private var currentProfile: UserProfile? {
+        switch phase {
+        case let .needsTerms(profile), let .signedIn(profile):
+            return profile
+        case .launching, .signedOut:
+            return nil
+        }
     }
 }

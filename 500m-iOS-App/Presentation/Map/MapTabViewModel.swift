@@ -62,6 +62,10 @@ final class MapTabViewModel: ObservableObject {
     private var lastRouteOrigin: LatLng?
     private var autoCallTask: Task<Void, Never>?
     private var lastNearbyLocation: LatLng?
+    private var lastNearbyBindLocation: LatLng?
+    private var lastNearbyBindAt: Date?
+    private var lastNearbyBindRadiusMeters: Int?
+    private var hasCompletedInitialNearbyFetch = false
 
     init(tab: MainTab, container: AppContainer? = nil) {
         self.tab = tab
@@ -379,7 +383,9 @@ final class MapTabViewModel: ObservableObject {
                     span: MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
                 )
                 cameraPosition = .region(region)
-                bindNearby(using: location)
+                if shouldRebindNearby(for: location) {
+                    bindNearby(using: location)
+                }
                 if let trackedDriverLocation {
                     refreshRouteIfNeeded(
                         from: LatLng(lat: trackedDriverLocation.lat, lng: trackedDriverLocation.lng),
@@ -394,11 +400,17 @@ final class MapTabViewModel: ObservableObject {
 
     private func bindNearby(using location: LatLng) {
         guard let container else { return }
+        lastNearbyLocation = location
+        lastNearbyBindLocation = location
+        lastNearbyBindRadiusMeters = radiusMeters
+        lastNearbyBindAt = Date()
+        let shouldShowInitialLoading = !hasCompletedInitialNearbyFetch
 
         switch tab {
         case .store:
-            lastNearbyLocation = location
-            isLoading = true
+            if shouldShowInitialLoading {
+                isLoading = true
+            }
             nearbyCancellable = container.observeNearbyStores(
                 userLat: location.lat,
                 userLng: location.lng,
@@ -406,13 +418,18 @@ final class MapTabViewModel: ObservableObject {
             )
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] stores in
-                    self?.isLoading = false
-                    self?.stores = stores.sorted { ($0.storeName ?? "") < ($1.storeName ?? "") }
-                    self?.drivers = []
+                    guard let self else { return }
+                    if !self.hasCompletedInitialNearbyFetch {
+                        self.hasCompletedInitialNearbyFetch = true
+                        self.isLoading = false
+                    }
+                    self.stores = stores.sorted { ($0.storeName ?? "") < ($1.storeName ?? "") }
+                    self.drivers = []
                 }
         case .taxi, .daeri:
-            lastNearbyLocation = location
-            isLoading = true
+            if shouldShowInitialLoading {
+                isLoading = true
+            }
             let serviceType: ServiceType = tab == .taxi ? .taxi : .daeri
             nearbyCancellable = container.observeNearbyDrivers(
                 serviceType: serviceType,
@@ -422,9 +439,13 @@ final class MapTabViewModel: ObservableObject {
             )
             .receive(on: DispatchQueue.main)
             .sink { [weak self] drivers in
-                self?.isLoading = false
-                self?.drivers = drivers.sorted { $0.updatedAt > $1.updatedAt }
-                self?.stores = []
+                guard let self else { return }
+                if !self.hasCompletedInitialNearbyFetch {
+                    self.hasCompletedInitialNearbyFetch = true
+                    self.isLoading = false
+                }
+                self.drivers = drivers.sorted { $0.updatedAt > $1.updatedAt }
+                self.stores = []
             }
         case .mypage:
             break
@@ -435,7 +456,34 @@ final class MapTabViewModel: ObservableObject {
         guard let location = lastNearbyLocation ?? userLocation else { return }
         nearbyCancellable?.cancel()
         nearbyCancellable = nil
+        lastNearbyBindLocation = nil
+        lastNearbyBindRadiusMeters = nil
+        lastNearbyBindAt = nil
         bindNearby(using: location)
+    }
+
+    private func shouldRebindNearby(for location: LatLng) -> Bool {
+        guard tab != .mypage else { return false }
+        guard nearbyCancellable != nil else { return true }
+        guard let lastNearbyBindLocation else { return true }
+        guard lastNearbyBindRadiusMeters == radiusMeters else { return true }
+
+        let movedDistance = GeoMath.haversineMeters(
+            location.lat,
+            location.lng,
+            lastNearbyBindLocation.lat,
+            lastNearbyBindLocation.lng
+        )
+
+        switch tab {
+        case .store:
+            return movedDistance >= 5
+        case .taxi, .daeri:
+            let elapsed = Date().timeIntervalSince(lastNearbyBindAt ?? .distantPast)
+            return movedDistance >= 5 && elapsed >= 5
+        case .mypage:
+            return false
+        }
     }
 
     private func loadPartnerInfo(for marker: DriverMarker) async {

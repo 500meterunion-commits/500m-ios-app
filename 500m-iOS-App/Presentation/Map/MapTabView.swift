@@ -25,25 +25,25 @@ private enum StoreCategoryFilter: String, CaseIterable, Identifiable {
 }
 
 struct MapTabView: View {
-    let tab: MainTab
+    @Binding var selectedTab: MainTab
 
     @EnvironmentObject private var container: AppContainer
     @Environment(\.openURL) private var openURL
-    @StateObject private var viewModel: MapTabViewModel
+    @StateObject private var storeViewModel = MapTabViewModel(tab: .store)
+    @StateObject private var taxiViewModel = MapTabViewModel(tab: .taxi)
+    @StateObject private var daeriViewModel = MapTabViewModel(tab: .daeri)
     @State private var selectedStoreCategories = Set(StoreCategoryFilter.allCases)
     @State private var isSheetExpanded = true
     @State private var shouldShowLoadingSheet = true
     @State private var sheetDragTranslation: CGFloat = 0
     @State private var kakaoPlaceIDToShow: String?
+    @State private var completedInitialStoreLoad = false
+    @State private var completedInitialTaxiLoad = false
+    @State private var completedInitialDaeriLoad = false
 
     private let brandRed = Color(red: 0.91, green: 0.29, blue: 0.29)
     private let textDark = Color(red: 0.16, green: 0.21, blue: 0.28)
     private let textMuted = Color(red: 0.67, green: 0.72, blue: 0.79)
-
-    init(tab: MainTab) {
-        self.tab = tab
-        _viewModel = StateObject(wrappedValue: MapTabViewModel(tab: tab))
-    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -52,11 +52,13 @@ struct MapTabView: View {
                     center: mapCenter,
                     radiusMeters: viewModel.radiusMeters,
                     storeMarkers: tab == .store ? filteredStores : [],
+                    driverMarkers: tab == .taxi || tab == .daeri ? viewModel.drivers : [],
                     onStoreTap: handleStoreTap,
+                    onDriverTap: handleDriverTap,
                     onMapTap: handleMapBackgroundTap
                 )
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .ignoresSafeArea()
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .ignoresSafeArea()
 
                 radiusOverlay
 
@@ -70,7 +72,7 @@ struct MapTabView: View {
                         maxExpandedHeight: maxExpandedSheetHeight(in: proxy),
                         containerWidth: proxy.size.width
                     )
-                        .padding(.bottom, 84)
+                    .padding(.bottom, 84)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
             }
@@ -78,24 +80,42 @@ struct MapTabView: View {
             .clipped()
         }
         .task {
-            viewModel.configure(container: container)
+            storeViewModel.configure(container: container)
+            taxiViewModel.configure(container: container)
+            daeriViewModel.configure(container: container)
+            shouldShowLoadingSheet = shouldAutoShowLoadingSheet
         }
-        .onChange(of: viewModel.isLoading) { isLoading in
+        .onChange(of: tab) { _, _ in
             withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
-                shouldShowLoadingSheet = isLoading || shouldShowEmptyState
-                if isLoading {
+                shouldShowLoadingSheet = shouldAutoShowLoadingSheet
+                isSheetExpanded = selectedPartnerCardVisible
+                sheetDragTranslation = 0
+            }
+        }
+        .onChange(of: viewModel.isLoading) { _, isLoading in
+            if !isLoading {
+                markInitialLoadCompleted(for: tab)
+            }
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+                shouldShowLoadingSheet = shouldAutoShowLoadingSheet
+                if isLoading && shouldAutoShowLoadingSheet {
                     isSheetExpanded = true
-                } else if sheetItemCount > 0 {
+                } else {
+                    isSheetExpanded = selectedPartnerCardVisible
+                }
+            }
+        }
+        .onChange(of: sheetItemCount) { _, itemCount in
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+                shouldShowLoadingSheet = shouldAutoShowLoadingSheet
+                if !viewModel.isLoading, !selectedPartnerCardVisible {
                     isSheetExpanded = false
                 }
             }
         }
-        .onChange(of: sheetItemCount) { itemCount in
+        .onChange(of: viewModel.selected?.id) { _, _ in
             withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
-                shouldShowLoadingSheet = viewModel.isLoading || itemCount == 0
-                if itemCount > 0, !viewModel.isLoading {
-                    isSheetExpanded = false
-                } else if itemCount == 0 {
+                if selectedPartnerCardVisible {
                     isSheetExpanded = true
                 }
             }
@@ -120,6 +140,21 @@ struct MapTabView: View {
         }
     }
 
+    private var tab: MainTab { selectedTab }
+
+    private var viewModel: MapTabViewModel {
+        switch tab {
+        case .store:
+            return storeViewModel
+        case .taxi:
+            return taxiViewModel
+        case .daeri:
+            return daeriViewModel
+        case .mypage:
+            return storeViewModel
+        }
+    }
+
     private var mapCenter: LatLng? {
         if let user = viewModel.userLocation {
             return user
@@ -131,7 +166,7 @@ struct MapTabView: View {
     }
 
     private var filteredStores: [StoreMarker] {
-        viewModel.stores.filter { store in
+        storeViewModel.stores.filter { store in
             guard let category = StoreCategoryFilter(rawValue: store.category) else { return false }
             return selectedStoreCategories.contains(category)
         }
@@ -140,26 +175,22 @@ struct MapTabView: View {
     private var radiusOverlay: some View {
         VStack(spacing: 18) {
             Button {
-                withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
-                    shouldShowLoadingSheet = true
-                    isSheetExpanded = true
-                }
                 viewModel.cycleRadius()
             } label: {
                 Capsule()
                     .fill(brandRed)
-                    .frame(width: 144, height: 38)
+                    .frame(width: 144, height: 58)
                     .overlay {
                         HStack(spacing: 10) {
                             Image("ic_logo")
                                 .renderingMode(.template)
                                 .resizable()
                                 .scaledToFit()
-                                .frame(width: 12, height: 12)
+                                .frame(width: 18, height: 18)
                                 .foregroundStyle(.white)
 
                             Text("\(viewModel.radiusMeters) 미터")
-                                .font(.system(size: 13, weight: .heavy))
+                                .font(.system(size: 18, weight: .heavy))
                                 .foregroundStyle(.white)
                         }
                     }
@@ -169,6 +200,7 @@ struct MapTabView: View {
 
             Spacer()
         }
+        .padding(.top, 50)
     }
 
     private var storeCategoryRow: some View {
@@ -187,26 +219,31 @@ struct MapTabView: View {
                                 .renderingMode(.template)
                                 .resizable()
                                 .scaledToFit()
-                                .frame(width: 14, height: 14)
+                                .frame(width: 18, height: 18)
                                 .foregroundStyle(brandRed)
 
                             Text(category.title)
-                                .font(.system(size: 11, weight: .bold))
+                                .font(.system(size: 14, weight: .bold))
                                 .foregroundStyle(textDark)
                         }
                         .padding(.horizontal, 12)
-                        .frame(height: 24)
+                        .frame(height: 44)
                         .background(.white, in: Capsule())
                         .overlay {
                             Capsule()
-                                .stroke(selectedStoreCategories.contains(category) ? brandRed : Color.black.opacity(0.08), lineWidth: selectedStoreCategories.contains(category) ? 2 : 1)
+                                .stroke(
+                                    selectedStoreCategories.contains(category)
+                                        ? brandRed
+                                        : Color.black.opacity(0.08),
+                                    lineWidth: selectedStoreCategories.contains(category) ? 2 : 1
+                                )
                         }
                         .shadow(color: .black.opacity(0.12), radius: 10, y: 5)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.top, 88)
+            .padding(.top, 130)
             .padding(.horizontal, 20)
 
             Spacer()
@@ -218,10 +255,7 @@ struct MapTabView: View {
         let collapsedVisibleHeight = collapsedSheetVisibleHeight(baseHeight: baseHeight)
         let maxCollapsedOffset = max(0, baseHeight - collapsedVisibleHeight)
         let restingOffset: CGFloat = isSheetExpanded ? 0 : maxCollapsedOffset
-        let currentOffset = min(
-            max(0, restingOffset + sheetDragTranslation),
-            maxCollapsedOffset
-        )
+        let currentOffset = min(max(0, restingOffset + sheetDragTranslation), maxCollapsedOffset)
 
         return VStack(alignment: .leading, spacing: 0) {
             if shouldShowSheetTitle {
@@ -281,48 +315,30 @@ struct MapTabView: View {
                                     )
                                 }
                             }
+                        } else if let selectedDriverData {
+                            DriverSelectedCard(
+                                data: selectedDriverData,
+                                isSubmitting: viewModel.isSubmitting,
+                                onClose: {
+                                    withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                                        collapseSheet()
+                                    }
+                                },
+                                onRequest: {
+                                    viewModel.requestSelectedDriver()
+                                }
+                            )
                         } else {
                             ForEach(listItems, id: \.id) { item in
                                 Button {
                                     handleListTap(item)
                                 } label: {
-                                    HStack(spacing: 14) {
-                                        Image(item.iconName)
-                                            .renderingMode(.template)
-                                            .resizable()
-                                            .scaledToFit()
-                                            .frame(width: 26, height: 26)
-                                            .foregroundStyle(item.tint)
-                                            .frame(width: 44, height: 44)
-                                            .background(item.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
-
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(item.title)
-                                                .font(.system(size: 16, weight: .bold))
-                                                .foregroundStyle(textDark)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                                            Text(item.subtitle)
-                                                .font(.system(size: 13, weight: .medium))
-                                                .foregroundStyle(textMuted)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                        }
-
-                                        if item.showAction {
-                                            Text(item.actionTitle)
-                                                .font(.system(size: 13, weight: .bold))
-                                                .foregroundStyle(.white)
-                                                .padding(.horizontal, 12)
-                                                .frame(height: 34)
-                                                .background(brandRed, in: Capsule())
-                                        }
-                                    }
-                                    .padding(16)
-                                    .background(Color.white, in: RoundedRectangle(cornerRadius: 22))
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 22)
-                                            .stroke(Color.black.opacity(0.05), lineWidth: 1)
-                                    }
+                                    DriverListRow(
+                                        item: item,
+                                        accent: brandRed,
+                                        textDark: textDark,
+                                        textMuted: textMuted
+                                    )
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -385,10 +401,7 @@ struct MapTabView: View {
     }
 
     private var shouldShowSheetTitle: Bool {
-        if isSelectedStoreSheet {
-            return false
-        }
-        return true
+        !(isSelectedStoreSheet || isSelectedDriverSheet)
     }
 
     private var emptyStateText: String {
@@ -406,11 +419,7 @@ struct MapTabView: View {
         }
 
         switch tab {
-        case .store:
-            return "주위에 파트너 데이터가 없습니다."
-        case .taxi:
-            return "주위에 파트너 데이터가 없습니다."
-        case .daeri:
+        case .store, .taxi, .daeri:
             return "주위에 파트너 데이터가 없습니다."
         case .mypage:
             return ""
@@ -421,13 +430,15 @@ struct MapTabView: View {
         switch tab {
         case .store:
             return filteredStores.isEmpty
-        case .taxi:
-            return viewModel.drivers.isEmpty
-        case .daeri:
+        case .taxi, .daeri:
             return viewModel.drivers.isEmpty
         case .mypage:
             return true
         }
+    }
+
+    private var shouldAutoShowLoadingSheet: Bool {
+        viewModel.isLoading && !hasCompletedInitialLoad(for: tab)
     }
 
     private func sheetBaseHeight(maxExpandedHeight: CGFloat) -> CGFloat {
@@ -437,6 +448,10 @@ struct MapTabView: View {
 
         if isSelectedStoreSheet {
             return min(maxExpandedHeight, 500)
+        }
+
+        if isSelectedDriverSheet {
+            return min(maxExpandedHeight, 380)
         }
 
         let hasData = sheetItemCount > 0
@@ -451,11 +466,7 @@ struct MapTabView: View {
             return baseHeight
         }
 
-        if isSelectedStoreSheet {
-            return 34
-        }
-
-        if sheetItemCount > 0 {
+        if isSelectedStoreSheet || isSelectedDriverSheet || sheetItemCount > 0 || shouldShowEmptyState {
             return 34
         }
 
@@ -464,7 +475,8 @@ struct MapTabView: View {
 
     private func maxExpandedSheetHeight(in proxy: GeometryProxy) -> CGFloat {
         let reservedBottomSpace: CGFloat = 96
-        return max(320, proxy.size.height - reservedBottomSpace)
+        let reservedTopSpace: CGFloat = 140
+        return max(320, proxy.size.height - reservedBottomSpace - reservedTopSpace)
     }
 
     private var sheetItemCount: Int {
@@ -487,11 +499,9 @@ struct MapTabView: View {
                 HomeListItem(
                     id: driver.id,
                     title: driver.name?.nilIfBlank ?? (tab == .taxi ? "택시 기사" : "대리 기사"),
-                    subtitle: driver.carNumber?.nilIfBlank ?? "주변 이동 파트너",
+                    subtitle: driverListSubtitle(for: driver),
                     iconName: tab == .taxi ? "tab_taxi" : "tab_daeri",
-                    tint: brandRed,
-                    showAction: true,
-                    actionTitle: tab == .taxi ? "호출" : "호출"
+                    tint: brandRed
                 )
             }
         case .mypage:
@@ -499,35 +509,27 @@ struct MapTabView: View {
         }
     }
 
-    private func iconName(for category: String) -> String {
-        switch category {
-        case "LIFE": return "ic_life"
-        case "FOOD": return "ic_food"
-        case "URGENT": return "ic_urgent"
-        default: return "ic_life"
-        }
-    }
-
     private func handleListTap(_ item: HomeListItem) {
-        switch tab {
-        case .store:
-            guard let store = filteredStores.first(where: { $0.id == item.id }) else { return }
-            viewModel.selectStore(store)
-            if let url = kakaoStoreURL(for: store) {
-                openURL(url)
-            }
-        case .taxi, .daeri:
-            guard let driver = viewModel.drivers.first(where: { $0.id == item.id }) else { return }
-            viewModel.selectDriver(driver)
-            viewModel.requestSelectedDriver()
-        case .mypage:
-            break
+        guard let driver = viewModel.drivers.first(where: { $0.id == item.id }) else { return }
+        viewModel.selectDriver(driver)
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+            isSheetExpanded = true
+            sheetDragTranslation = 0
         }
     }
 
     private func handleStoreTap(_ storeID: String) {
         guard let store = filteredStores.first(where: { $0.id == storeID }) else { return }
-        viewModel.selectStore(store)
+        storeViewModel.selectStore(store)
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+            isSheetExpanded = true
+            sheetDragTranslation = 0
+        }
+    }
+
+    private func handleDriverTap(_ driverID: String) {
+        guard let driver = viewModel.drivers.first(where: { $0.id == driverID }) else { return }
+        viewModel.selectDriver(driver)
         withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
             isSheetExpanded = true
             sheetDragTranslation = 0
@@ -540,8 +542,34 @@ struct MapTabView: View {
         }
     }
 
+    private func hasCompletedInitialLoad(for tab: MainTab) -> Bool {
+        switch tab {
+        case .store:
+            return completedInitialStoreLoad
+        case .taxi:
+            return completedInitialTaxiLoad
+        case .daeri:
+            return completedInitialDaeriLoad
+        case .mypage:
+            return true
+        }
+    }
+
+    private func markInitialLoadCompleted(for tab: MainTab) {
+        switch tab {
+        case .store:
+            completedInitialStoreLoad = true
+        case .taxi:
+            completedInitialTaxiLoad = true
+        case .daeri:
+            completedInitialDaeriLoad = true
+        case .mypage:
+            break
+        }
+    }
+
     private func openStoreDetail(_ store: StoreMarker) {
-        viewModel.selectStore(store)
+        storeViewModel.selectStore(store)
         collapseSheet()
         if !store.kakaoStoreRegId.isEmpty {
             kakaoPlaceIDToShow = store.kakaoStoreRegId
@@ -553,18 +581,70 @@ struct MapTabView: View {
     }
 
     private func storeDistanceText(for store: StoreMarker) -> String {
-        guard let user = viewModel.userLocation else { return "근처" }
+        guard let user = storeViewModel.userLocation else { return "근처" }
         let meters = Int(GeoMath.haversineMeters(user.lat, user.lng, store.lat, store.lng))
         return "\(meters)m 이내"
     }
 
     private var selectedStoreCard: (store: StoreMarker, distanceText: String)? {
-        guard case let .store(store) = viewModel.selected else { return nil }
+        guard tab == .store, case let .store(store) = storeViewModel.selected else { return nil }
         return (store, storeDistanceText(for: store))
+    }
+
+    private var selectedDriverData: DriverSelectedCardData? {
+        guard (tab == .taxi || tab == .daeri),
+              case let .driver(driver) = viewModel.selected else { return nil }
+
+        let partnerInfo = viewModel.selectedPartnerInfo
+        let name: String
+        let memo: String
+        let profileImageURL: String?
+        let insuranceJoined: Bool?
+        let carNumber: String?
+
+        switch partnerInfo {
+        case let .taxi(info):
+            name = info.name?.nilIfBlank ?? driver.name?.nilIfBlank ?? "택시 기사"
+            memo = info.memo?.nilIfBlank ?? "안전하고 신속하게 모시겠습니다."
+            profileImageURL = info.photoURL?.nilIfBlank
+            insuranceJoined = nil
+            carNumber = info.carNumber?.nilIfBlank ?? driver.carNumber?.nilIfBlank
+        case let .daeri(info):
+            name = info.name?.nilIfBlank ?? driver.name?.nilIfBlank ?? "대리 기사"
+            memo = info.memo?.nilIfBlank ?? "안전하고 신속하게 모시겠습니다."
+            profileImageURL = info.photoURL?.nilIfBlank
+            insuranceJoined = info.insuranceSubscribed
+            carNumber = nil
+        case .store, .none:
+            name = driver.name?.nilIfBlank ?? (tab == .taxi ? "택시 기사" : "대리 기사")
+            memo = "안전하고 신속하게 모시겠습니다."
+            profileImageURL = nil
+            insuranceJoined = driver.insuranceSubscribed
+            carNumber = driver.carNumber?.nilIfBlank
+        }
+
+        return DriverSelectedCardData(
+            name: name,
+            memo: memo,
+            profileImageURL: profileImageURL,
+            etaText: viewModel.routeEtaText,
+            distanceText: driverDistanceText(for: driver),
+            carNumber: carNumber,
+            insuranceJoined: insuranceJoined,
+            isTaxi: tab == .taxi
+        )
     }
 
     private var isSelectedStoreSheet: Bool {
         tab == .store && selectedStoreCard != nil
+    }
+
+    private var isSelectedDriverSheet: Bool {
+        (tab == .taxi || tab == .daeri) && selectedDriverData != nil
+    }
+
+    private var selectedPartnerCardVisible: Bool {
+        isSelectedStoreSheet || isSelectedDriverSheet
     }
 
     private var storeListCards: [StoreMarker] {
@@ -574,7 +654,7 @@ struct MapTabView: View {
     private func collapseSheet() {
         isSheetExpanded = false
         sheetDragTranslation = 0
-        if isSelectedStoreSheet {
+        if isSelectedStoreSheet || isSelectedDriverSheet {
             viewModel.clearSelection()
         }
     }
@@ -585,6 +665,20 @@ struct MapTabView: View {
         }
         return URL(string: "kakaomap://look?p=\(store.lat),\(store.lng)")
     }
+
+    private func driverDistanceText(for driver: DriverMarker) -> String {
+        guard let user = viewModel.userLocation else { return "근처" }
+        let meters = Int(GeoMath.haversineMeters(user.lat, user.lng, driver.lat, driver.lng))
+        return "\(meters)m 이내"
+    }
+
+    private func driverListSubtitle(for driver: DriverMarker) -> String {
+        if tab == .taxi {
+            return "\(driver.carNumber?.nilIfBlank ?? "차량 번호 미등록")  ·  \(driverDistanceText(for: driver))"
+        }
+        let insuranceText = driver.insuranceSubscribed == true ? "보험 가입완료" : "보험 정보 확인중"
+        return "\(insuranceText)  ·  \(driverDistanceText(for: driver))"
+    }
 }
 
 private struct HomeListItem {
@@ -593,8 +687,200 @@ private struct HomeListItem {
     let subtitle: String
     let iconName: String
     let tint: Color
-    let showAction: Bool
-    let actionTitle: String
+}
+
+private struct DriverSelectedCardData {
+    let name: String
+    let memo: String
+    let profileImageURL: String?
+    let etaText: String
+    let distanceText: String
+    let carNumber: String?
+    let insuranceJoined: Bool?
+    let isTaxi: Bool
+}
+
+private struct DriverListRow: View {
+    let item: HomeListItem
+    let accent: Color
+    let textDark: Color
+    let textMuted: Color
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(item.iconName)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 26, height: 26)
+                .foregroundStyle(accent)
+                .frame(width: 46, height: 46)
+                .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+
+            Text(item.title)
+                .font(.system(size: 24, weight: .heavy))
+                .foregroundStyle(textDark)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
+                .frame(height: 34)
+
+            Text(item.subtitle)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(textDark)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 22)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 26))
+        .shadow(color: .black.opacity(0.08), radius: 14, y: 8)
+    }
+}
+
+private struct DriverSelectedCard: View {
+    let data: DriverSelectedCardData
+    let isSubmitting: Bool
+    let onClose: () -> Void
+    let onRequest: () -> Void
+
+    private let brandRed = Color(red: 0.91, green: 0.29, blue: 0.29)
+    private let textDark = Color(red: 0.07, green: 0.09, blue: 0.14)
+    private let textMuted = Color(red: 0.60, green: 0.65, blue: 0.73)
+    private let green = Color(red: 0.19, green: 0.77, blue: 0.42)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 16) {
+                ZStack(alignment: .bottomTrailing) {
+                    Group {
+                        if let urlString = data.profileImageURL,
+                           let url = URL(string: urlString) {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case let .success(image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    Image("ic_profile_placeholder")
+                                        .resizable()
+                                        .scaledToFill()
+                                }
+                            }
+                        } else {
+                            Image("ic_profile_placeholder")
+                                .resizable()
+                                .scaledToFill()
+                        }
+                    }
+                    .frame(width: 74, height: 74)
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 22, height: 22)
+                        .overlay {
+                            Circle()
+                                .fill(green)
+                                .padding(3)
+                        }
+                        .offset(x: 5, y: 5)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(data.name)
+                        .font(.system(size: 28, weight: .heavy))
+                        .foregroundStyle(textDark)
+
+                    Text(data.memo)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(textMuted)
+                        .lineLimit(2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack(spacing: 0) {
+                MetricColumn(title: "도착 예상", value: data.etaText, valueColor: textDark)
+
+                Divider()
+                    .frame(height: 56)
+
+                MetricColumn(
+                    title: data.isTaxi ? "자동차 번호" : "보험 가입 여부",
+                    value: data.isTaxi ? (data.carNumber ?? "—") : (data.insuranceJoined == true ? "가입완료" : "미가입"),
+                    valueColor: data.isTaxi ? brandRed : (data.insuranceJoined == true ? brandRed : textDark)
+                )
+
+                Divider()
+                    .frame(height: 56)
+
+                MetricColumn(title: "현재 위치", value: data.distanceText, valueColor: textDark)
+            }
+            .padding(.top, 20)
+
+            HStack(spacing: 14) {
+                Button(action: onClose) {
+                    Text("닫기")
+                        .font(.system(size: 18, weight: .heavy))
+                        .foregroundStyle(Color(red: 0.29, green: 0.33, blue: 0.39))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 62)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 28))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 28)
+                                .stroke(Color(red: 0.84, green: 0.87, blue: 0.91), lineWidth: 2)
+                        }
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onRequest) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 28)
+                            .fill(brandRed)
+                        if isSubmitting {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Text("서비스 신청")
+                                .font(.system(size: 18, weight: .heavy))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 62)
+                }
+                .buttonStyle(.plain)
+                .disabled(isSubmitting)
+            }
+            .padding(.top, 22)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 28))
+        .shadow(color: .black.opacity(0.08), radius: 14, y: 8)
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 20)
+    }
+}
+
+private struct MetricColumn: View {
+    let title: String
+    let value: String
+    let valueColor: Color
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color(red: 0.60, green: 0.65, blue: 0.73))
+
+            Text(value)
+                .font(.system(size: 17, weight: .heavy))
+                .foregroundStyle(valueColor)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+    }
 }
 
 private struct StoreBottomCard: View {
