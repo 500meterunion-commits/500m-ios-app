@@ -94,7 +94,7 @@ struct UsageHistoryView: View {
 
     private func historyCard(_ item: UserHistoryItem) -> some View {
         HStack(spacing: 16) {
-            AsyncImage(url: URL(string: item.providerProfileImageURL ?? "")) { image in
+            CachedRemoteImage(url: URL(string: item.providerProfileImageURL ?? "")) { image in
                 image
                     .resizable()
                     .scaledToFill()

@@ -903,15 +903,14 @@ private struct DriverSelectedCard: View {
                     Group {
                         if let urlString = data.profileImageURL,
                            let url = URL(string: urlString) {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case let .success(image):
-                                    image.resizable().scaledToFill()
-                                default:
-                                    Image("ic_profile_placeholder")
-                                        .resizable()
-                                        .scaledToFill()
-                                }
+                            CachedRemoteImage(url: url) { image in
+                                image
+                                    .resizable()
+                                    .scaledToFill()
+                            } placeholder: {
+                                Image("ic_profile_placeholder")
+                                    .resizable()
+                                    .scaledToFill()
                             }
                         } else {
                             Image("ic_profile_placeholder")
@@ -1165,15 +1164,14 @@ private struct DriverSessionCard: View {
                 Group {
                     if let urlString = data.profileImageURL,
                        let url = URL(string: urlString) {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case let .success(image):
-                                image.resizable().scaledToFill()
-                            default:
-                                Image("ic_profile_placeholder")
-                                    .resizable()
-                                    .scaledToFill()
-                            }
+                        CachedRemoteImage(url: url) { image in
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        } placeholder: {
+                            Image("ic_profile_placeholder")
+                                .resizable()
+                                .scaledToFill()
                         }
                     } else {
                         Image("ic_profile_placeholder")
@@ -1278,17 +1276,14 @@ private struct StoreBottomCard: View {
             Group {
                 if let urlString = store.promoImageURL?.nilIfBlank,
                    let url = URL(string: urlString) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case let .success(image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        default:
-                            Image("ic_store_promo_placeholder")
-                                .resizable()
-                                .scaledToFill()
-                        }
+                    CachedRemoteImage(url: url) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        Image("ic_store_promo_placeholder")
+                            .resizable()
+                            .scaledToFill()
                     }
                 } else {
                     Image("ic_store_promo_placeholder")

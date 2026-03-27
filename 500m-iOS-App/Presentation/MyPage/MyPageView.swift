@@ -272,7 +272,7 @@ struct MyPageView: View {
     @ViewBuilder
     private func profileAvatar(size: CGFloat) -> some View {
         if let urlString = currentProfile.userProfileURL?.nilIfBlank, let url = URL(string: urlString) {
-            AsyncImage(url: url) { image in
+            CachedRemoteImage(url: url) { image in
                 image
                     .resizable()
                     .scaledToFill()

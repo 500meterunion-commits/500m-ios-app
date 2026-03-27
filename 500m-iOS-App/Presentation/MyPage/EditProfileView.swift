@@ -229,7 +229,7 @@ struct EditProfileView: View {
                 .frame(width: size, height: size)
                 .clipShape(Circle())
         } else if let urlString = viewModel.remoteImageURL?.nilIfBlank, let url = URL(string: urlString) {
-            AsyncImage(url: url) { image in
+            CachedRemoteImage(url: url) { image in
                 image
                     .resizable()
                     .scaledToFill()
