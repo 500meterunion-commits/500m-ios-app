@@ -71,7 +71,7 @@ struct MapTabView: View {
 
                 VStack {
                     Spacer()
-                    if !viewModel.shouldHideDriverBottomSheet {
+                    if !viewModel.shouldHideDriverBottomSheet && !viewModel.shouldShowIncomingDriverDialog {
                         bottomSheet(
                             maxExpandedHeight: maxExpandedSheetHeight(in: proxy),
                             containerWidth: proxy.size.width
@@ -80,6 +80,25 @@ struct MapTabView: View {
                     }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
+
+                if let incomingRequest = viewModel.activeDriverSessionRequest,
+                   viewModel.shouldShowIncomingDriverDialog {
+                    IncomingDriverRequestOverlay(
+                        data: IncomingDriverRequestData(
+                            userName: viewModel.incomingUserName ?? "사용자",
+                            userPhotoURL: viewModel.incomingUserPhotoURL,
+                            distanceText: viewModel.routeDistanceText,
+                            serviceTitle: incomingRequest.serviceType == .taxi ? "택시 기사 호출" : "대리 기사 호출",
+                            memo: incomingRequest.memo?.nilIfBlank
+                        ),
+                        onReject: {
+                            viewModel.rejectDriverRequest(incomingRequest.id)
+                        },
+                        onAccept: {
+                            viewModel.acceptDriverRequest(incomingRequest.id)
+                        }
+                    )
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
@@ -608,6 +627,7 @@ struct MapTabView: View {
 
     private func handleMapBackgroundTap() {
         guard !viewModel.shouldShowDriverSessionSheet else { return }
+        guard !viewModel.shouldShowIncomingDriverDialog else { return }
         withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
             collapseSheet()
         }
@@ -834,6 +854,14 @@ private struct DriverSelectedCardData {
     let carNumber: String?
     let insuranceJoined: Bool?
     let isTaxi: Bool
+}
+
+private struct IncomingDriverRequestData {
+    let userName: String
+    let userPhotoURL: String?
+    let distanceText: String
+    let serviceTitle: String
+    let memo: String?
 }
 
 private struct DriverSessionCardData {
@@ -1237,6 +1265,124 @@ private struct DriverSessionCard: View {
         .overlay {
             RoundedRectangle(cornerRadius: 24)
                 .stroke(Color(red: 0.94, green: 0.95, blue: 0.97), lineWidth: 1)
+        }
+    }
+}
+
+private struct IncomingDriverRequestOverlay: View {
+    let data: IncomingDriverRequestData
+    let onReject: () -> Void
+    let onAccept: () -> Void
+
+    private let brandRed = Color(red: 0.91, green: 0.29, blue: 0.29)
+    private let textDark = Color(red: 0.07, green: 0.09, blue: 0.14)
+    private let textMuted = Color(red: 0.60, green: 0.65, blue: 0.73)
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.22)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 18, weight: .bold))
+                    Text("서비스 요청 알림")
+                        .font(.system(size: 18, weight: .heavy))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 22)
+                .frame(height: 58)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(brandRed)
+
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack(spacing: 16) {
+                        Group {
+                            if let urlString = data.userPhotoURL,
+                               let url = URL(string: urlString) {
+                                CachedRemoteImage(url: url) { image in
+                                    image
+                                        .resizable()
+                                        .scaledToFill()
+                                } placeholder: {
+                                    Image("ic_profile_placeholder")
+                                        .resizable()
+                                        .scaledToFill()
+                                }
+                            } else {
+                                Image("ic_profile_placeholder")
+                                    .resizable()
+                                    .scaledToFill()
+                            }
+                        }
+                        .frame(width: 64, height: 64)
+                        .clipShape(Circle())
+                        .background(Color(red: 0.95, green: 0.96, blue: 0.98), in: Circle())
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Text(data.userName)
+                                    .font(.system(size: 24, weight: .heavy))
+                                    .foregroundStyle(textDark)
+                                Image(systemName: "location.fill")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(brandRed)
+                                Text(data.distanceText)
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundStyle(brandRed)
+                            }
+                            Text("500m 내 활동 중")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(textMuted)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(data.serviceTitle)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(textDark)
+
+                        if let memo = data.memo {
+                            Text(memo)
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(textMuted)
+                                .lineLimit(2)
+                        }
+                    }
+
+                    HStack(spacing: 12) {
+                        Button(action: onReject) {
+                            Text("거절하기")
+                                .font(.system(size: 18, weight: .heavy))
+                                .foregroundStyle(brandRed)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 56)
+                                .background(.white, in: RoundedRectangle(cornerRadius: 28))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 28)
+                                        .stroke(brandRed, lineWidth: 1.5)
+                                }
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: onAccept) {
+                            Text("수락하기")
+                                .font(.system(size: 18, weight: .heavy))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 56)
+                                .background(brandRed, in: RoundedRectangle(cornerRadius: 28))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(24)
+                .background(.white)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 28))
+            .shadow(color: .black.opacity(0.18), radius: 22, y: 14)
+            .padding(.horizontal, 22)
         }
     }
 }

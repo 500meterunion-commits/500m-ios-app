@@ -44,11 +44,24 @@ struct EditProfileView: View {
                         )
                     } else {
                         fieldBlock(
-                            title: "계정 등급",
+                            title: viewModel.partnerPrimaryInfo?.title ?? "계정 등급",
                             borderColor: .clear,
                             background: Color(red: 0.96, green: 0.97, blue: 0.98),
                             content: AnyView(
-                                Text(accountGradeText)
+                                Text(viewModel.partnerPrimaryInfo?.value ?? accountGradeText)
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundStyle(Color(red: 0.67, green: 0.73, blue: 0.79))
+                            )
+                        )
+                    }
+
+                    if let secondary = viewModel.partnerSecondaryInfo {
+                        fieldBlock(
+                            title: secondary.title,
+                            borderColor: .clear,
+                            background: Color(red: 0.96, green: 0.97, blue: 0.98),
+                            content: AnyView(
+                                Text(secondary.value)
                                     .font(.system(size: 18, weight: .medium))
                                     .foregroundStyle(Color(red: 0.67, green: 0.73, blue: 0.79))
                             )

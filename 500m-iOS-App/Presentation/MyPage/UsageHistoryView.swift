@@ -93,45 +93,98 @@ struct UsageHistoryView: View {
     }
 
     private func historyCard(_ item: UserHistoryItem) -> some View {
-        HStack(spacing: 16) {
-            CachedRemoteImage(url: URL(string: item.providerProfileImageURL ?? "")) { image in
-                image
-                    .resizable()
-                    .scaledToFill()
-            } placeholder: {
-                Image(systemName: "person.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(Color(red: 0.58, green: 0.66, blue: 0.72))
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 16) {
+                CachedRemoteImage(url: URL(string: item.providerProfileImageURL ?? "")) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(Color(red: 0.58, green: 0.66, blue: 0.72))
+                }
+                .frame(width: 58, height: 58)
+                .background(Color(red: 0.95, green: 0.96, blue: 0.98))
+                .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text(item.providerName?.nilIfBlank ?? "기사님")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(Color(red: 0.07, green: 0.1, blue: 0.16))
+
+                        Text(item.service == .taxi ? "택시" : "대리")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(item.service == .taxi ? brandOrange : Color(red: 0.91, green: 0.29, blue: 0.29))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                (item.service == .taxi ? brandOrange : Color(red: 0.91, green: 0.29, blue: 0.29))
+                                    .opacity(0.12),
+                                in: Capsule()
+                            )
+                    }
+
+                    HStack(spacing: 10) {
+                        Text(item.status.koreanText)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color(red: 0.39, green: 0.45, blue: 0.54))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Color(red: 0.95, green: 0.96, blue: 0.98), in: RoundedRectangle(cornerRadius: 8))
+
+                        Text(historyDate(item.createdAtMs))
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(Color(red: 0.39, green: 0.45, blue: 0.54))
+                    }
+                }
+
+                Spacer()
             }
-            .frame(width: 58, height: 58)
-            .background(Color(red: 0.95, green: 0.96, blue: 0.98))
-            .clipShape(Circle())
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(item.providerName?.nilIfBlank ?? "기사님")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(Color(red: 0.07, green: 0.1, blue: 0.16))
+            HStack(spacing: 10) {
+                historyMetricCard(
+                    title: "호출 상태",
+                    value: item.status.koreanText
+                )
+                historyMetricCard(
+                    title: "서비스",
+                    value: item.service == .taxi ? "택시" : "대리"
+                )
+            }
 
-                HStack(spacing: 10) {
-                    Text(item.status.koreanText)
+            if let pickupLat = item.pickupLat, let pickupLng = item.pickupLng {
+                HStack(spacing: 8) {
+                    Image(systemName: "location.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color(red: 0.58, green: 0.66, blue: 0.72))
+                    Text(String(format: "픽업 위치 %.4f, %.4f", pickupLat, pickupLng))
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color(red: 0.39, green: 0.45, blue: 0.54))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color(red: 0.95, green: 0.96, blue: 0.98), in: RoundedRectangle(cornerRadius: 8))
-
-                    Text(historyDate(item.createdAtMs))
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(Color(red: 0.39, green: 0.45, blue: 0.54))
+                        .foregroundStyle(Color(red: 0.58, green: 0.66, blue: 0.72))
+                        .lineLimit(1)
                 }
             }
-
-            Spacer()
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
         .background(Color.white, in: RoundedRectangle(cornerRadius: 22))
         .shadow(color: .black.opacity(0.05), radius: 12, y: 6)
+    }
+
+    private func historyMetricCard(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color(red: 0.58, green: 0.66, blue: 0.72))
+            Text(value)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Color(red: 0.07, green: 0.1, blue: 0.16))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color(red: 0.97, green: 0.98, blue: 0.99), in: RoundedRectangle(cornerRadius: 14))
     }
 
     private func historyDate(_ ms: Int64) -> String {

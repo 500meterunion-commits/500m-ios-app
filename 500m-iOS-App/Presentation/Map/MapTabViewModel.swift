@@ -33,6 +33,8 @@ final class MapTabViewModel: ObservableObject {
     @Published private(set) var trackedDriverLocation: DriverLocation?
     @Published private(set) var routePolyline: RoutePolyline?
     @Published private(set) var myDriverRequests: [MatchRequest] = []
+    @Published private(set) var incomingUserName: String?
+    @Published private(set) var incomingUserPhotoURL: String?
     @Published private(set) var isAutoCalling = false
     @Published private(set) var autoCallCandidateIDs: [String] = []
     @Published private(set) var autoCallCurrentIndex = -1
@@ -270,7 +272,13 @@ final class MapTabViewModel: ObservableObject {
     }
 
     var shouldShowDriverSessionSheet: Bool {
-        shouldShowDriverConsole && activeDriverSessionRequest != nil
+        guard shouldShowDriverConsole, let activeDriverSessionRequest else { return false }
+        return activeDriverSessionRequest.status != .pending
+    }
+
+    var shouldShowIncomingDriverDialog: Bool {
+        guard shouldShowDriverConsole, let activeDriverSessionRequest else { return false }
+        return activeDriverSessionRequest.status == .pending
     }
 
     var activeUserMatchedRequest: MatchRequest? {
@@ -734,6 +742,14 @@ final class MapTabViewModel: ObservableObject {
             self.myDriverRequests = requests.sorted { $0.createdAt > $1.createdAt }
 
             if let activeRequest = self.activeDriverSessionRequest {
+                if activeRequest.status == .pending {
+                    Task {
+                        await self.loadIncomingUserProfile(uid: activeRequest.userId)
+                    }
+                } else {
+                    self.incomingUserName = nil
+                    self.incomingUserPhotoURL = nil
+                }
                 self.selected = nil
                 self.startTracking(driverId: activeRequest.driverId)
                 Task {
@@ -751,8 +767,22 @@ final class MapTabViewModel: ObservableObject {
                 self.trackedDriverCancellable = nil
                 self.routePolyline = nil
                 self.lastRouteOrigin = nil
+                self.incomingUserName = nil
+                self.incomingUserPhotoURL = nil
                 self.updateCamera()
             }
+        }
+    }
+
+    private func loadIncomingUserProfile(uid: String) async {
+        guard let container else { return }
+        do {
+            let user = try await container.userRepository.getUserProfile(uid: uid)
+            incomingUserName = user?.displayName?.nilIfBlank ?? "사용자"
+            incomingUserPhotoURL = user?.userProfileURL?.nilIfBlank
+        } catch {
+            incomingUserName = "사용자"
+            incomingUserPhotoURL = nil
         }
     }
 

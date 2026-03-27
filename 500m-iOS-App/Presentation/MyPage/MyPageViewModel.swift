@@ -1,11 +1,22 @@
 import Combine
 import FirebaseAuth
 import Foundation
+import UIKit
 
 @MainActor
 final class MyPageViewModel: ObservableObject {
+    struct StorePromoState: Equatable {
+        var storeId: String?
+        var remoteImageURL: String?
+        var localImageData: Data?
+        var promoText: String = ""
+        var isSaving = false
+    }
+
     @Published private(set) var profile: UserProfile?
     @Published private(set) var partnerInfo: PartnerInfo?
+    @Published private(set) var displayProfileImageURL: String?
+    @Published private(set) var storePromo = StorePromoState()
     @Published private(set) var isBusy = false
     @Published var alertMessage: String?
     @Published var requestedRoute: MainRoute?
@@ -51,6 +62,20 @@ final class MyPageViewModel: ObservableObject {
         requestedRoute = nil
     }
 
+    func onPromoTextChange(_ value: String) {
+        storePromo.promoText = value
+    }
+
+    func onPickPromoImage(_ data: Data?) {
+        storePromo.localImageData = data
+    }
+
+    func saveStorePromo() {
+        Task {
+            await persistStorePromo()
+        }
+    }
+
     func onServiceToggle(_ mode: UserMode) {
         Task {
             await handleServiceToggle(mode)
@@ -92,10 +117,43 @@ final class MyPageViewModel: ObservableObject {
             .sink { [weak self] profile in
                 self?.profile = profile
                 Task { @MainActor [weak self] in
+                    await self?.loadDisplayProfilePhoto()
                     await self?.loadPartnerInfo()
+                    await self?.loadStorePromo()
                 }
             }
             .store(in: &cancellables)
+    }
+
+    private func loadDisplayProfilePhoto() async {
+        guard let profile else {
+            displayProfileImageURL = nil
+            return
+        }
+        guard let container else { return }
+
+        do {
+            switch profile.mode {
+            case .partnerTaxi:
+                guard let partnerID = profile.taxiPartnerId,
+                      let driver = try await container.partnerRepository.getTaxiDriver(driverId: partnerID) else {
+                    displayProfileImageURL = profile.userProfileURL
+                    return
+                }
+                displayProfileImageURL = driver.photoURL?.nilIfBlank ?? profile.userProfileURL
+            case .partnerDaeri:
+                guard let partnerID = profile.daeriPartnerId,
+                      let driver = try await container.partnerRepository.getDaeriDriver(driverId: partnerID) else {
+                    displayProfileImageURL = profile.userProfileURL
+                    return
+                }
+                displayProfileImageURL = driver.photoURL?.nilIfBlank ?? profile.userProfileURL
+            case .general, .partnerStore:
+                displayProfileImageURL = profile.userProfileURL
+            }
+        } catch {
+            displayProfileImageURL = profile.userProfileURL
+        }
     }
 
     private func loadPartnerInfo() async {
@@ -121,6 +179,30 @@ final class MyPageViewModel: ObservableObject {
             }
         } catch {
             partnerInfo = nil
+        }
+    }
+
+    private func loadStorePromo() async {
+        guard let profile, profile.mode == .partnerStore else {
+            storePromo = StorePromoState()
+            return
+        }
+        guard let container, let storeID = profile.storePartnerId else { return }
+
+        do {
+            guard let store = try await container.partnerRepository.getStore(storeId: storeID) else {
+                storePromo = StorePromoState(storeId: storeID)
+                return
+            }
+            storePromo = StorePromoState(
+                storeId: storeID,
+                remoteImageURL: store.promoImageURL,
+                localImageData: nil,
+                promoText: store.promoText ?? "",
+                isSaving: false
+            )
+        } catch {
+            storePromo = StorePromoState(storeId: storeID)
         }
     }
 
@@ -177,5 +259,86 @@ final class MyPageViewModel: ObservableObject {
             uid: profile.id,
             patch: UserProfilePatch(mode: mode)
         )
+    }
+
+    private func persistStorePromo() async {
+        guard let container, let profile else { return }
+        guard profile.mode == .partnerStore else { return }
+        guard let storeID = profile.storePartnerId?.nilIfBlank else { return }
+
+        let hasImage = storePromo.localImageData != nil || storePromo.remoteImageURL?.nilIfBlank != nil
+        let hasText = storePromo.promoText.nilIfBlank != nil
+
+        guard hasImage else {
+            alertMessage = "홍보 이미지를 등록해 주세요."
+            return
+        }
+
+        guard hasText else {
+            alertMessage = "홍보 문구를 입력해 주세요."
+            return
+        }
+
+        isBusy = true
+        storePromo.isSaving = true
+        defer {
+            isBusy = false
+            storePromo.isSaving = false
+        }
+
+        do {
+            let currentStore = try await container.partnerRepository.getStore(storeId: storeID)
+            let uploadedURL: String?
+            if let imageData = storePromo.localImageData,
+               !imageData.isEmpty {
+                uploadedURL = try await container.partnerRepository.uploadStorePromoImage(
+                    storeId: storeID,
+                    imageData: imageData
+                )
+            } else {
+                uploadedURL = nil
+            }
+
+            let nextStore = Store(
+                storeId: storeID,
+                marketId: currentStore?.marketId ?? profile.marketId,
+                storeName: currentStore?.storeName,
+                kakaoStoreRegId: currentStore?.kakaoStoreRegId,
+                ownerBirthDate: currentStore?.ownerBirthDate,
+                ownerName: currentStore?.ownerName,
+                ownerPhone: currentStore?.ownerPhone,
+                promoImageURL: uploadedURL ?? currentStore?.promoImageURL,
+                promoText: storePromo.promoText.nilIfBlank ?? currentStore?.promoText,
+                insuranceShared: currentStore?.insuranceShared,
+                category: currentStore?.category,
+                lat: currentStore?.lat,
+                lng: currentStore?.lng
+            )
+
+            try await container.partnerRepository.upsertStore(nextStore)
+
+            if let kakaoStoreRegId = nextStore.kakaoStoreRegId?.nilIfBlank,
+               let category = nextStore.category?.nilIfBlank,
+               let lat = nextStore.lat,
+               let lng = nextStore.lng {
+                try await container.upsertStoreIndex(
+                    storeId: nextStore.id,
+                    kakaoStoreRegId: kakaoStoreRegId,
+                    category: category,
+                    lat: lat,
+                    lng: lng,
+                    storeName: nextStore.storeName,
+                    promoImageURL: nextStore.promoImageURL,
+                    promoText: nextStore.promoText
+                )
+            }
+
+            storePromo.remoteImageURL = nextStore.promoImageURL
+            storePromo.localImageData = nil
+            storePromo.promoText = nextStore.promoText ?? storePromo.promoText
+            alertMessage = "홍보 내용이 저장되었습니다."
+        } catch {
+            alertMessage = error.localizedDescription
+        }
     }
 }

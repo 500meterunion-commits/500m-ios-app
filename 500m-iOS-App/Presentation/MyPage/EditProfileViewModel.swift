@@ -7,6 +7,8 @@ final class EditProfileViewModel: ObservableObject {
     @Published var memo = ""
     @Published private(set) var mode: UserMode = .general
     @Published private(set) var remoteImageURL: String?
+    @Published private(set) var partnerPrimaryInfo: (title: String, value: String)?
+    @Published private(set) var partnerSecondaryInfo: (title: String, value: String)?
     @Published private(set) var isSaving = false
     @Published var errorMessage: String?
     @Published var didSave = false
@@ -62,6 +64,8 @@ final class EditProfileViewModel: ObservableObject {
                 else { return }
                 memo = driver.memo ?? ""
                 remoteImageURL = driver.photoURL ?? profile.userProfileURL
+                partnerPrimaryInfo = ("계정 등급", "택시 기사")
+                partnerSecondaryInfo = ("자동차 번호", driver.carNumber?.nilIfBlank ?? "미등록")
                 if let driverName = driver.name?.nilIfBlank {
                     name = driverName
                 }
@@ -71,16 +75,44 @@ final class EditProfileViewModel: ObservableObject {
                 else { return }
                 memo = driver.memo ?? ""
                 remoteImageURL = driver.photoURL ?? profile.userProfileURL
+                partnerPrimaryInfo = ("계정 등급", "대리 기사")
+                partnerSecondaryInfo = ("보험 가입 여부", driver.insuranceSubscribed == true ? "가입완료" : "미가입")
                 if let driverName = driver.name?.nilIfBlank {
                     name = driverName
                 }
-            case .general, .partnerStore:
+            case .partnerStore:
                 memo = ""
                 remoteImageURL = profile.userProfileURL
+                partnerPrimaryInfo = ("계정 등급", "자영업 파트너")
+                if let storeID = profile.storePartnerId,
+                   let store = try await container.partnerRepository.getStore(storeId: storeID) {
+                    partnerSecondaryInfo = ("매장명", store.storeName?.nilIfBlank ?? "미등록")
+                } else {
+                    partnerSecondaryInfo = ("매장명", "미등록")
+                }
+            case .general:
+                memo = ""
+                remoteImageURL = profile.userProfileURL
+                partnerPrimaryInfo = ("계정 등급", "일반 사용자")
+                partnerSecondaryInfo = nil
             }
         } catch {
             memo = ""
             remoteImageURL = profile.userProfileURL
+            switch profile.mode {
+            case .partnerTaxi:
+                partnerPrimaryInfo = ("계정 등급", "택시 기사")
+                partnerSecondaryInfo = ("자동차 번호", "미등록")
+            case .partnerDaeri:
+                partnerPrimaryInfo = ("계정 등급", "대리 기사")
+                partnerSecondaryInfo = ("보험 가입 여부", "미등록")
+            case .partnerStore:
+                partnerPrimaryInfo = ("계정 등급", "자영업 파트너")
+                partnerSecondaryInfo = ("매장명", "미등록")
+            case .general:
+                partnerPrimaryInfo = ("계정 등급", "일반 사용자")
+                partnerSecondaryInfo = nil
+            }
         }
     }
 
