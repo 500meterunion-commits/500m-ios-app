@@ -5,6 +5,8 @@ import UIKit
 enum MediaPickerSource: Identifiable {
     case camera
     case photoLibrary(selectionLimit: Int)
+    case editableCamera
+    case editablePhotoLibrary
 
     var id: String {
         switch self {
@@ -12,6 +14,10 @@ enum MediaPickerSource: Identifiable {
             return "camera"
         case let .photoLibrary(selectionLimit):
             return "photoLibrary-\(selectionLimit)"
+        case .editableCamera:
+            return "editableCamera"
+        case .editablePhotoLibrary:
+            return "editablePhotoLibrary"
         }
     }
 }
@@ -34,6 +40,24 @@ struct MediaPicker: UIViewControllerRepresentable {
             picker.sourceType = .camera
             picker.mediaTypes = ["public.image"]
             picker.allowsEditing = false
+            picker.modalPresentationStyle = .fullScreen
+            picker.view.backgroundColor = .black
+            return picker
+        case .editableCamera:
+            let picker = UIImagePickerController()
+            picker.delegate = context.coordinator
+            picker.sourceType = .camera
+            picker.mediaTypes = ["public.image"]
+            picker.allowsEditing = true
+            picker.modalPresentationStyle = .fullScreen
+            picker.view.backgroundColor = .black
+            return picker
+        case .editablePhotoLibrary:
+            let picker = UIImagePickerController()
+            picker.delegate = context.coordinator
+            picker.sourceType = .photoLibrary
+            picker.mediaTypes = ["public.image"]
+            picker.allowsEditing = true
             picker.modalPresentationStyle = .fullScreen
             picker.view.backgroundColor = .black
             return picker

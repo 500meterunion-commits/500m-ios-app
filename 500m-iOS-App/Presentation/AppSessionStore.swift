@@ -1,6 +1,7 @@
 import Combine
 import FirebaseAuth
 import Foundation
+import UIKit
 
 @MainActor
 final class AppSessionStore: ObservableObject {
@@ -22,14 +23,19 @@ final class AppSessionStore: ObservableObject {
     private var authStateHandle: AuthStateDidChangeListenerHandle?
     private var profileCancellable: AnyCancellable?
     private var fcmTokenCancellable: AnyCancellable?
+    private var foregroundCancellable: AnyCancellable?
     private let launchStartedAt = Date()
     private var latestFcmToken: String?
 
     init(container: AppContainer) {
         self.container = container
+        PendingMatchAutoExpireScheduler.shared.configure { requestId in
+            try? await container.expireIfPending(requestId: requestId)
+        }
         bindFcmToken()
         bindProfileCache()
         bindAuthState()
+        bindForegroundRefresh()
     }
 
     deinit {
@@ -100,6 +106,16 @@ final class AppSessionStore: ObservableObject {
                 latestFcmToken = token
                 Task { @MainActor [weak self] in
                     await self?.registerPushTokensIfPossible()
+                }
+            }
+    }
+
+    private func bindForegroundRefresh() {
+        foregroundCancellable = NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { _ in
+                Task { @MainActor in
+                    await PendingMatchAutoExpireScheduler.shared.flushExpiredRequests()
                 }
             }
     }
@@ -221,5 +237,111 @@ final class AppSessionStore: ObservableObject {
         case .launching, .signedOut:
             return nil
         }
+    }
+}
+
+@MainActor
+final class PendingMatchAutoExpireScheduler {
+    static let shared = PendingMatchAutoExpireScheduler()
+
+    private let defaults = UserDefaults.standard
+    private let storageKey = "pendingMatchAutoExpireDeadlines"
+    private var expireAction: ((String) async -> Void)?
+    private var tasks: [String: Task<Void, Never>] = [:]
+    private var backgroundTaskIDs: [String: UIBackgroundTaskIdentifier] = [:]
+
+    private init() { }
+
+    func configure(expireAction: @escaping (String) async -> Void) {
+        self.expireAction = expireAction
+        restoreScheduledTasks()
+    }
+
+    func schedule(requestId: String, delaySeconds: TimeInterval = 10) {
+        guard let normalizedId = requestId.nilIfBlank else { return }
+        let deadline = Date().addingTimeInterval(delaySeconds)
+        saveDeadline(deadline, for: normalizedId)
+        startTask(for: normalizedId, deadline: deadline)
+    }
+
+    func cancel(requestId: String) {
+        guard let normalizedId = requestId.nilIfBlank else { return }
+        tasks[normalizedId]?.cancel()
+        tasks[normalizedId] = nil
+        finishBackgroundTask(for: normalizedId)
+
+        var storage = deadlineStorage()
+        storage.removeValue(forKey: normalizedId)
+        defaults.set(storage, forKey: storageKey)
+    }
+
+    func flushExpiredRequests() async {
+        let now = Date()
+        for (requestId, deadline) in deadlineStorage() {
+            guard deadline <= now else {
+                if tasks[requestId] == nil {
+                    startTask(for: requestId, deadline: deadline)
+                }
+                continue
+            }
+
+            cancel(requestId: requestId)
+            await expireAction?(requestId)
+        }
+    }
+
+    private func restoreScheduledTasks() {
+        for (requestId, deadline) in deadlineStorage() where tasks[requestId] == nil {
+            startTask(for: requestId, deadline: deadline)
+        }
+    }
+
+    private func startTask(for requestId: String, deadline: Date) {
+        tasks[requestId]?.cancel()
+        beginBackgroundTask(for: requestId)
+
+        tasks[requestId] = Task { [weak self] in
+            guard let self else { return }
+            let nanoseconds = max(0, deadline.timeIntervalSinceNow) * 1_000_000_000
+            if nanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(nanoseconds))
+            }
+            guard !Task.isCancelled else { return }
+            self.cancel(requestId: requestId)
+            await self.expireAction?(requestId)
+        }
+    }
+
+    private func saveDeadline(_ deadline: Date, for requestId: String) {
+        var storage = deadlineStorage()
+        storage[requestId] = deadline
+        defaults.set(storage, forKey: storageKey)
+    }
+
+    private func deadlineStorage() -> [String: Date] {
+        guard let raw = defaults.dictionary(forKey: storageKey) else { return [:] }
+        return raw.reduce(into: [String: Date]()) { partial, entry in
+            if let value = entry.value as? TimeInterval {
+                partial[entry.key] = Date(timeIntervalSince1970: value)
+            } else if let value = entry.value as? Date {
+                partial[entry.key] = value
+            }
+        }
+    }
+
+    private func beginBackgroundTask(for requestId: String) {
+        finishBackgroundTask(for: requestId)
+        let identifier = UIApplication.shared.beginBackgroundTask(withName: "autoExpire_\(requestId)") { [weak self] in
+            Task { @MainActor in
+                self?.finishBackgroundTask(for: requestId)
+            }
+        }
+        backgroundTaskIDs[requestId] = identifier
+    }
+
+    private func finishBackgroundTask(for requestId: String) {
+        guard let identifier = backgroundTaskIDs.removeValue(forKey: requestId),
+              identifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(identifier)
     }
 }

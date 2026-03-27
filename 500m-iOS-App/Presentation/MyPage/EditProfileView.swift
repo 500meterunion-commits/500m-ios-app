@@ -88,11 +88,11 @@ struct EditProfileView: View {
         }
         .confirmationDialog("프로필 이미지를 선택해 주세요", isPresented: $showImageSourceDialog, titleVisibility: .visible) {
             Button("앨범에서 선택") {
-                activeMediaPicker = .photoLibrary(selectionLimit: 1)
+                activeMediaPicker = .editablePhotoLibrary
             }
             Button("직접 촬영") {
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    activeMediaPicker = .camera
+                    activeMediaPicker = .editableCamera
                 } else {
                     showCameraUnavailableAlert = true
                 }

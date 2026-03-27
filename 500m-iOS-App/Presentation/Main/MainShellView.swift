@@ -3,6 +3,7 @@ import SwiftUI
 struct MainShellView: View {
     let profile: UserProfile
 
+    @EnvironmentObject private var deepLinkCenter: AppDeepLinkCenter
     @State private var selectedTab: MainTab = .store
     @State private var activeMapTab: MainTab = .store
     @State private var pushRoute: MainRoute?
@@ -11,7 +12,13 @@ struct MainShellView: View {
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottom) {
-                MapTabView(selectedTab: $activeMapTab)
+                MapTabView(
+                    selectedTab: $activeMapTab,
+                    pendingMatchRoute: deepLinkCenter.pendingMatchRoute,
+                    onConsumeMatchRoute: { route in
+                        deepLinkCenter.consumeMatchRoute(route)
+                    }
+                )
                     .opacity(selectedTab == .mypage ? 0 : 1)
                     .allowsHitTesting(selectedTab != .mypage)
                     .ignoresSafeArea(.container, edges: .top)
@@ -38,6 +45,14 @@ struct MainShellView: View {
                     activeMapTab = newValue
                 }
             }
+            .onChange(of: deepLinkCenter.pendingMatchRoute?.id) { _, _ in
+                guard let route = deepLinkCenter.pendingMatchRoute else { return }
+                handleMatchDeepLink(route)
+            }
+            .onChange(of: deepLinkCenter.pendingPartnerApplicationRoute?.id) { _, _ in
+                guard let route = deepLinkCenter.pendingPartnerApplicationRoute else { return }
+                handlePartnerApplicationDeepLink(route)
+            }
             .navigationDestination(item: $pushRoute) { route in
                 switch route {
                 case .editProfile:
@@ -56,6 +71,40 @@ struct MainShellView: View {
                 PartnerApplyView(mode: mode)
             }
         }
+    }
+
+    private func handleMatchDeepLink(_ route: MatchPushRoute) {
+        let targetTab: MainTab? = switch route.serviceType.uppercased() {
+        case "TAXI": .taxi
+        case "DAERI": .daeri
+        default: nil
+        }
+
+        let myDriverTab: MainTab? = switch profile.mode {
+        case .partnerTaxi: .taxi
+        case .partnerDaeri: .daeri
+        case .general, .partnerStore: nil
+        }
+
+        switch route.type {
+        case .matchRequest:
+            if let myDriverTab, myDriverTab == targetTab {
+                selectedTab = myDriverTab
+                activeMapTab = myDriverTab
+            }
+        case .matchAccepted, .matchRejected, .matchCanceled, .matchExpired, .rideCompleted:
+            if let targetTab {
+                selectedTab = targetTab
+                activeMapTab = targetTab
+            }
+        case .partnerApplicationApproved, .partnerApplicationRejected:
+            break
+        }
+    }
+
+    private func handlePartnerApplicationDeepLink(_ route: PartnerApplicationPushRoute) {
+        selectedTab = .mypage
+        deepLinkCenter.consumePartnerRoute(route)
     }
 }
 

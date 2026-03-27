@@ -68,11 +68,11 @@ struct MyPageView: View {
         }
         .confirmationDialog("홍보 이미지를 선택해 주세요", isPresented: $showPromoImageSourceDialog, titleVisibility: .visible) {
             Button("앨범에서 선택") {
-                activePromoMediaPicker = .photoLibrary(selectionLimit: 1)
+                activePromoMediaPicker = .editablePhotoLibrary
             }
             Button("직접 촬영") {
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    activePromoMediaPicker = .camera
+                    activePromoMediaPicker = .editableCamera
                 } else {
                     showCameraUnavailableAlert = true
                 }

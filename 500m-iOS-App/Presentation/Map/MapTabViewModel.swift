@@ -35,6 +35,7 @@ final class MapTabViewModel: ObservableObject {
     @Published private(set) var myDriverRequests: [MatchRequest] = []
     @Published private(set) var incomingUserName: String?
     @Published private(set) var incomingUserPhotoURL: String?
+    @Published private(set) var incomingCountdownSeconds: Int?
     @Published private(set) var isAutoCalling = false
     @Published private(set) var autoCallCandidateIDs: [String] = []
     @Published private(set) var autoCallCurrentIndex = -1
@@ -63,6 +64,9 @@ final class MapTabViewModel: ObservableObject {
     private var routeTask: Task<Void, Never>?
     private var lastRouteOrigin: LatLng?
     private var autoCallTask: Task<Void, Never>?
+    private var incomingTimeoutTask: Task<Void, Never>?
+    private var userPendingAutoCancelTask: Task<Void, Never>?
+    private var timedIncomingRequestID: String?
     private var lastNearbyLocation: LatLng?
     private var lastNearbyBindLocation: LatLng?
     private var lastNearbyBindAt: Date?
@@ -177,6 +181,7 @@ final class MapTabViewModel: ObservableObject {
 
     func cancelActiveMatch() {
         guard let requestID = activeMatch?.id, let container else { return }
+        PendingMatchAutoExpireScheduler.shared.cancel(requestId: requestID)
         Task {
             do {
                 try await container.cancelMatchRequest(requestId: requestID)
@@ -188,6 +193,7 @@ final class MapTabViewModel: ObservableObject {
 
     func acceptDriverRequest(_ requestID: String) {
         guard let container else { return }
+        PendingMatchAutoExpireScheduler.shared.cancel(requestId: requestID)
         Task {
             do {
                 try await container.acceptMatchRequest(requestId: requestID)
@@ -199,6 +205,7 @@ final class MapTabViewModel: ObservableObject {
 
     func rejectDriverRequest(_ requestID: String) {
         guard let container else { return }
+        PendingMatchAutoExpireScheduler.shared.cancel(requestId: requestID)
         Task {
             do {
                 try await container.rejectMatchRequest(requestId: requestID)
@@ -210,6 +217,7 @@ final class MapTabViewModel: ObservableObject {
 
     func startRide(_ requestID: String) {
         guard let container else { return }
+        PendingMatchAutoExpireScheduler.shared.cancel(requestId: requestID)
         Task {
             do {
                 try await container.startRide(requestId: requestID)
@@ -221,6 +229,7 @@ final class MapTabViewModel: ObservableObject {
 
     func completeRide(_ requestID: String) {
         guard let container else { return }
+        PendingMatchAutoExpireScheduler.shared.cancel(requestId: requestID)
         Task {
             do {
                 try await container.completeRide(requestId: requestID)
@@ -267,6 +276,10 @@ final class MapTabViewModel: ObservableObject {
         }
     }
 
+    var pendingDriverRequests: [MatchRequest] {
+        myDriverRequests.filter { $0.status == .pending }
+    }
+
     var shouldHideDriverBottomSheet: Bool {
         shouldShowDriverConsole && activeDriverSessionRequest == nil
     }
@@ -284,6 +297,12 @@ final class MapTabViewModel: ObservableObject {
     var activeUserMatchedRequest: MatchRequest? {
         guard !shouldShowDriverConsole, let activeMatch else { return nil }
         guard activeMatch.status == .accepted else { return nil }
+        return activeMatch
+    }
+
+    var activeUserRidingRequest: MatchRequest? {
+        guard !shouldShowDriverConsole, let activeMatch else { return nil }
+        guard activeMatch.status == .inProgress else { return nil }
         return activeMatch
     }
 
@@ -682,20 +701,38 @@ final class MapTabViewModel: ObservableObject {
 
                 switch request.status {
                 case .pending:
+                    PendingMatchAutoExpireScheduler.shared.schedule(requestId: request.id)
+                    schedulePendingRequestAutoCancel(requestID: request.id)
                     break
                 case .accepted:
                     recentTerminalMatch = nil
                     resetAutoCallState()
+                    cancelIncomingTimeout()
+                    userPendingAutoCancelTask?.cancel()
+                    userPendingAutoCancelTask = nil
+                    PendingMatchAutoExpireScheduler.shared.cancel(requestId: request.id)
                 case .inProgress:
                     recentTerminalMatch = nil
                     resetAutoCallState()
+                    cancelIncomingTimeout()
+                    userPendingAutoCancelTask?.cancel()
+                    userPendingAutoCancelTask = nil
+                    PendingMatchAutoExpireScheduler.shared.cancel(requestId: request.id)
                     routePolyline = nil
                     lastRouteOrigin = nil
                 case .completed:
                     recentTerminalMatch = request
                     resetAutoCallState()
+                    cancelIncomingTimeout()
+                    userPendingAutoCancelTask?.cancel()
+                    userPendingAutoCancelTask = nil
+                    PendingMatchAutoExpireScheduler.shared.cancel(requestId: request.id)
                     clearRideStateAfterCompletion()
                 case .rejected, .canceled, .expired:
+                    cancelIncomingTimeout()
+                    userPendingAutoCancelTask?.cancel()
+                    userPendingAutoCancelTask = nil
+                    PendingMatchAutoExpireScheduler.shared.cancel(requestId: request.id)
                     if isAutoCalling {
                         tryNextAutoCall()
                     } else {
@@ -743,10 +780,12 @@ final class MapTabViewModel: ObservableObject {
 
             if let activeRequest = self.activeDriverSessionRequest {
                 if activeRequest.status == .pending {
+                    self.startIncomingTimeout(requestId: activeRequest.id)
                     Task {
                         await self.loadIncomingUserProfile(uid: activeRequest.userId)
                     }
                 } else {
+                    self.cancelIncomingTimeout()
                     self.incomingUserName = nil
                     self.incomingUserPhotoURL = nil
                 }
@@ -762,6 +801,7 @@ final class MapTabViewModel: ObservableObject {
                     self.lastRouteOrigin = nil
                 }
             } else if self.shouldShowDriverConsole {
+                self.cancelIncomingTimeout()
                 self.selectedPartnerInfo = nil
                 self.trackedDriverLocation = nil
                 self.trackedDriverCancellable = nil
@@ -783,6 +823,65 @@ final class MapTabViewModel: ObservableObject {
         } catch {
             incomingUserName = "사용자"
             incomingUserPhotoURL = nil
+        }
+    }
+
+    private func startIncomingTimeout(requestId: String) {
+        guard timedIncomingRequestID != requestId || incomingTimeoutTask == nil else { return }
+        cancelIncomingTimeout()
+        timedIncomingRequestID = requestId
+        incomingCountdownSeconds = 10
+        PendingMatchAutoExpireScheduler.shared.schedule(requestId: requestId)
+        incomingTimeoutTask = Task { [weak self] in
+            guard let self else { return }
+            var remaining = 10
+            while remaining > 0 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                remaining -= 1
+                await MainActor.run {
+                    guard self.activeDriverSessionRequest?.id == requestId,
+                          self.activeDriverSessionRequest?.status == .pending else { return }
+                    self.incomingCountdownSeconds = remaining
+                }
+            }
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard self.activeDriverSessionRequest?.id == requestId,
+                      self.activeDriverSessionRequest?.status == .pending,
+                      let container = self.container else { return }
+                Task {
+                    try? await container.expireIfPending(requestId: requestId)
+                }
+            }
+        }
+    }
+
+    private func cancelIncomingTimeout() {
+        if let timedIncomingRequestID {
+            PendingMatchAutoExpireScheduler.shared.cancel(requestId: timedIncomingRequestID)
+        }
+        incomingTimeoutTask?.cancel()
+        incomingTimeoutTask = nil
+        timedIncomingRequestID = nil
+        incomingCountdownSeconds = nil
+    }
+
+    private func schedulePendingRequestAutoCancel(requestID: String) {
+        PendingMatchAutoExpireScheduler.shared.schedule(requestId: requestID)
+        userPendingAutoCancelTask?.cancel()
+        userPendingAutoCancelTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard self.activeMatch?.id == requestID,
+                      self.activeMatch?.status == .pending,
+                      let container = self.container else { return }
+                Task {
+                    try? await container.expireIfPending(requestId: requestID)
+                }
+            }
         }
     }
 
@@ -953,6 +1052,9 @@ final class MapTabViewModel: ObservableObject {
         trackedDriverCancellable = nil
         routePolyline = nil
         lastRouteOrigin = nil
+        cancelIncomingTimeout()
+        userPendingAutoCancelTask?.cancel()
+        userPendingAutoCancelTask = nil
         if selected == nil {
             selectedPartnerInfo = nil
         }
@@ -1032,5 +1134,36 @@ final class MapTabViewModel: ObservableObject {
             self.region = region
             cameraPosition = .region(region)
         }
+    }
+
+    func handleMatchPushRoute(_ route: MatchPushRoute) {
+        switch route.type {
+        case .matchRequest:
+            if shouldShowDriverConsole {
+                bindDriverRequestsIfNeeded()
+            }
+        case .matchAccepted, .matchRejected, .matchExpired, .rideCompleted:
+            observeActiveMatch(requestID: route.requestId)
+        case .matchCanceled:
+            if shouldShowDriverConsole {
+                onDriverCanceledByUser()
+            } else {
+                observeActiveMatch(requestID: route.requestId)
+            }
+        case .partnerApplicationApproved, .partnerApplicationRejected:
+            break
+        }
+    }
+
+    func onDriverCanceledByUser() {
+        cancelIncomingTimeout()
+        selected = nil
+        selectedPartnerInfo = nil
+        trackedDriverLocation = nil
+        trackedDriverCancellable = nil
+        routePolyline = nil
+        lastRouteOrigin = nil
+        myDriverRequests = []
+        updateCamera()
     }
 }

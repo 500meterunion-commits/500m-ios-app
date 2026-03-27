@@ -10,4 +10,5 @@ struct ContentView: View {
     ContentView()
         .environmentObject(AppContainer())
         .environmentObject(AppSessionStore(container: AppContainer()))
+        .environmentObject(AppDeepLinkCenter.shared)
 }
