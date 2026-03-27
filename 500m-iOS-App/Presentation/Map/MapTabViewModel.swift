@@ -253,6 +253,121 @@ final class MapTabViewModel: ObservableObject {
         }
     }
 
+    var activeDriverSessionRequest: MatchRequest? {
+        guard shouldShowDriverConsole else { return nil }
+        return myDriverRequests.first {
+            switch $0.status {
+            case .pending, .accepted, .inProgress:
+                return true
+            case .completed, .rejected, .canceled, .expired:
+                return false
+            }
+        }
+    }
+
+    var shouldHideDriverBottomSheet: Bool {
+        shouldShowDriverConsole && activeDriverSessionRequest == nil
+    }
+
+    var shouldShowDriverSessionSheet: Bool {
+        shouldShowDriverConsole && activeDriverSessionRequest != nil
+    }
+
+    var activeUserMatchedRequest: MatchRequest? {
+        guard !shouldShowDriverConsole, let activeMatch else { return nil }
+        guard activeMatch.status == .accepted else { return nil }
+        return activeMatch
+    }
+
+    var shouldHideUserMarker: Bool {
+        activeUserMatchedRequest != nil
+    }
+
+    var pickupLocation: LatLng? {
+        if let request = activeDriverSessionRequest, request.status == .accepted {
+            return LatLng(lat: request.pickupLat, lng: request.pickupLng)
+        }
+        if let request = activeUserMatchedRequest {
+            return LatLng(lat: request.pickupLat, lng: request.pickupLng)
+        }
+        return nil
+    }
+
+    var shouldShowMatchedRoute: Bool {
+        if let request = activeDriverSessionRequest {
+            return request.status == .accepted
+        }
+        if let request = activeUserMatchedRequest {
+            return request.status == .accepted
+        }
+        return false
+    }
+
+    var matchedDriverMarker: DriverMarker? {
+        guard let activeMatch, !shouldShowDriverConsole else { return nil }
+        guard activeMatch.status == .accepted else { return nil }
+
+        if let trackedDriverLocation {
+            return DriverMarker(
+                driverId: activeMatch.driverId,
+                lat: trackedDriverLocation.lat,
+                lng: trackedDriverLocation.lng,
+                status: trackedDriverLocation.status,
+                serviceType: currentServiceType?.rawValue.uppercased() ?? "TAXI",
+                updatedAt: trackedDriverLocation.updatedAt,
+                name: trackedDriverLocation.name,
+                carNumber: trackedDriverLocation.carNumber,
+                insuranceSubscribed: trackedDriverLocation.insuranceSubscribed
+            )
+        }
+
+        return drivers.first(where: { $0.driverId == activeMatch.driverId })
+    }
+
+    var driverSessionStatusText: String {
+        guard let request = activeDriverSessionRequest else { return "" }
+        switch request.status {
+        case .pending:
+            return "새 호출 요청"
+        case .accepted:
+            return "픽업 장소 이동 중"
+        case .inProgress:
+            return "운행 진행 중"
+        case .completed:
+            return "운행 완료"
+        case .rejected:
+            return "호출 거절"
+        case .canceled:
+            return "호출 취소"
+        case .expired:
+            return "호출 만료"
+        }
+    }
+
+    var driverSessionName: String {
+        if let selectedPartnerInfo {
+            switch selectedPartnerInfo {
+            case let .taxi(driver):
+                return driver.name?.nilIfBlank ?? "택시 기사"
+            case let .daeri(driver):
+                return driver.name?.nilIfBlank ?? "대리 기사"
+            case let .store(store):
+                return store.storeName?.nilIfBlank ?? "가게"
+            }
+        }
+
+        if let name = trackedDriverLocation?.name?.nilIfBlank {
+            return name
+        }
+
+        if let request = activeDriverSessionRequest,
+           let marker = drivers.first(where: { $0.driverId == request.driverId }) {
+            return marker.name?.nilIfBlank ?? "기사"
+        }
+
+        return tab == .taxi ? "택시 기사" : "대리 기사"
+    }
+
     var autoCallStatusText: String {
         guard isAutoCalling else { return "자동 호출 대기" }
         let step = max(0, autoCallCurrentIndex + 1)
@@ -560,9 +675,14 @@ final class MapTabViewModel: ObservableObject {
                 switch request.status {
                 case .pending:
                     break
-                case .accepted, .inProgress:
+                case .accepted:
                     recentTerminalMatch = nil
                     resetAutoCallState()
+                case .inProgress:
+                    recentTerminalMatch = nil
+                    resetAutoCallState()
+                    routePolyline = nil
+                    lastRouteOrigin = nil
                 case .completed:
                     recentTerminalMatch = request
                     resetAutoCallState()
@@ -610,7 +730,29 @@ final class MapTabViewModel: ObservableObject {
         )
         .receive(on: DispatchQueue.main)
         .sink { [weak self] requests in
-            self?.myDriverRequests = requests.sorted { $0.createdAt > $1.createdAt }
+            guard let self else { return }
+            self.myDriverRequests = requests.sorted { $0.createdAt > $1.createdAt }
+
+            if let activeRequest = self.activeDriverSessionRequest {
+                self.selected = nil
+                self.startTracking(driverId: activeRequest.driverId)
+                Task {
+                    await self.loadPartnerInfo(partnerId: activeRequest.driverId)
+                }
+                if self.shouldShowMatchedRoute, let origin = self.userLocation ?? self.pickupLocation {
+                    self.refreshRouteIfNeeded(from: origin, force: false)
+                } else {
+                    self.routePolyline = nil
+                    self.lastRouteOrigin = nil
+                }
+            } else if self.shouldShowDriverConsole {
+                self.selectedPartnerInfo = nil
+                self.trackedDriverLocation = nil
+                self.trackedDriverCancellable = nil
+                self.routePolyline = nil
+                self.lastRouteOrigin = nil
+                self.updateCamera()
+            }
         }
     }
 
@@ -621,16 +763,38 @@ final class MapTabViewModel: ObservableObject {
             .sink { [weak self] location in
                 guard let self else { return }
                 trackedDriverLocation = location
-                refreshRouteIfNeeded(
-                    from: LatLng(lat: location.lat, lng: location.lng),
-                    force: false
-                )
+                if shouldShowMatchedRoute {
+                    refreshRouteIfNeeded(
+                        from: LatLng(lat: location.lat, lng: location.lng),
+                        force: false
+                    )
+                } else {
+                    routePolyline = nil
+                    lastRouteOrigin = nil
+                }
                 updateCamera()
             }
     }
 
     private func refreshRouteIfNeeded(from origin: LatLng, force: Bool) {
-        guard let container, userLocation != nil, currentServiceType != nil else { return }
+        guard let container, currentServiceType != nil else { return }
+        guard shouldShowMatchedRoute else {
+            routeTask?.cancel()
+            routePolyline = nil
+            lastRouteOrigin = nil
+            updateCamera()
+            return
+        }
+        let destination: LatLng?
+        if shouldShowDriverSessionSheet, let pickupLocation {
+            destination = pickupLocation
+        } else if let request = activeUserMatchedRequest {
+            destination = LatLng(lat: request.pickupLat, lng: request.pickupLng)
+        } else {
+            destination = userLocation
+        }
+        guard let destination else { return }
+
         if !force, let lastRouteOrigin {
             let movedDistance = GeoMath.haversineMeters(
                 origin.lat,
@@ -646,13 +810,13 @@ final class MapTabViewModel: ObservableObject {
         lastRouteOrigin = origin
         routeTask?.cancel()
         routeTask = Task { [weak self] in
-            guard let self, let userLocation else { return }
+            guard let self else { return }
             do {
                 let route = try await container.getRoutePolyline(
                     originLat: origin.lat,
                     originLng: origin.lng,
-                    destLat: userLocation.lat,
-                    destLng: userLocation.lng
+                    destLat: destination.lat,
+                    destLng: destination.lng
                 )
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
@@ -780,6 +944,38 @@ final class MapTabViewModel: ObservableObject {
                 cameraPosition = .rect(padded)
                 return
             }
+        }
+
+        if let userLocation, let pickupLocation, shouldShowDriverSessionSheet {
+            let center = CLLocationCoordinate2D(
+                latitude: (userLocation.lat + pickupLocation.lat) / 2,
+                longitude: (userLocation.lng + pickupLocation.lng) / 2
+            )
+            let latDelta = max(abs(userLocation.lat - pickupLocation.lat) * 1.8, 0.01)
+            let lngDelta = max(abs(userLocation.lng - pickupLocation.lng) * 1.8, 0.01)
+            let region = MKCoordinateRegion(
+                center: center,
+                span: MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: lngDelta)
+            )
+            self.region = region
+            cameraPosition = .region(region)
+            return
+        }
+
+        if let pickupLocation, let trackedDriverLocation, activeUserMatchedRequest != nil {
+            let center = CLLocationCoordinate2D(
+                latitude: (pickupLocation.lat + trackedDriverLocation.lat) / 2,
+                longitude: (pickupLocation.lng + trackedDriverLocation.lng) / 2
+            )
+            let latDelta = max(abs(pickupLocation.lat - trackedDriverLocation.lat) * 1.8, 0.01)
+            let lngDelta = max(abs(pickupLocation.lng - trackedDriverLocation.lng) * 1.8, 0.01)
+            let region = MKCoordinateRegion(
+                center: center,
+                span: MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: lngDelta)
+            )
+            self.region = region
+            cameraPosition = .region(region)
+            return
         }
 
         if let userLocation, let trackedDriverLocation {

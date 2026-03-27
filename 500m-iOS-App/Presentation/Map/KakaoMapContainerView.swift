@@ -7,6 +7,9 @@ struct KakaoMapContainerView: UIViewRepresentable {
     let radiusMeters: Int
     let storeMarkers: [StoreMarker]
     let driverMarkers: [DriverMarker]
+    let showUserMarker: Bool
+    let pickupMarker: LatLng?
+    let routePolyline: RoutePolyline?
     let onStoreTap: (String) -> Void
     let onDriverTap: (String) -> Void
     let onMapTap: () -> Void
@@ -27,6 +30,9 @@ struct KakaoMapContainerView: UIViewRepresentable {
             radiusMeters: radiusMeters,
             storeMarkers: storeMarkers,
             driverMarkers: driverMarkers,
+            showUserMarker: showUserMarker,
+            pickupMarker: pickupMarker,
+            routePolyline: routePolyline,
             onStoreTap: onStoreTap,
             onDriverTap: onDriverTap,
             onMapTap: onMapTap
@@ -44,6 +50,9 @@ struct KakaoMapContainerView: UIViewRepresentable {
         private var currentRadiusMeters: Int = 500
         private var currentStoreMarkers: [StoreMarker] = []
         private var currentDriverMarkers: [DriverMarker] = []
+        private var shouldShowUserMarker = true
+        private var currentPickupMarker: LatLng?
+        private var currentRoutePolyline: RoutePolyline?
         private var onStoreTap: ((String) -> Void)?
         private var onDriverTap: ((String) -> Void)?
         private var onMapTap: (() -> Void)?
@@ -54,6 +63,9 @@ struct KakaoMapContainerView: UIViewRepresentable {
         private var lastRenderedRadiusMeters: Int?
         private var lastRenderedStoreMarkers: [StoreMarker] = []
         private var lastRenderedDriverMarkers: [DriverMarker] = []
+        private var lastRenderedShowUserMarker = true
+        private var lastRenderedPickupMarker: LatLng?
+        private var lastRenderedRoutePolyline: RoutePolyline?
         private var poiTapHandler: (any DisposableEventHandler)?
         private var mapTapHandler: (any DisposableEventHandler)?
 
@@ -66,9 +78,13 @@ struct KakaoMapContainerView: UIViewRepresentable {
         private let storeUrgentStyleID = "store_urgent_style"
         private let taxiStyleID = "taxi_marker_style"
         private let daeriStyleID = "daeri_marker_style"
+        private let pickupStyleID = "pickup_marker_style"
         private let polygonStyleID = "radius_polygon_style"
+        private let routeStyleID = "route_polyline_style"
         private let userPoiID = "me"
+        private let pickupPoiID = "pickup"
         private let radiusShapeID = "radius"
+        private let routeShapeID = "route"
         
         private var userMarkerImage: UIImage? {
             let baseImage: UIImage?
@@ -132,6 +148,9 @@ struct KakaoMapContainerView: UIViewRepresentable {
             radiusMeters: Int,
             storeMarkers: [StoreMarker],
             driverMarkers: [DriverMarker],
+            showUserMarker: Bool,
+            pickupMarker: LatLng?,
+            routePolyline: RoutePolyline?,
             onStoreTap: @escaping (String) -> Void,
             onDriverTap: @escaping (String) -> Void,
             onMapTap: @escaping () -> Void
@@ -140,11 +159,17 @@ struct KakaoMapContainerView: UIViewRepresentable {
             let didRadiusChange = radiusMeters != currentRadiusMeters
             let didStoreMarkersChange = storeMarkers != currentStoreMarkers
             let didDriverMarkersChange = driverMarkers != currentDriverMarkers
+            let didUserMarkerVisibilityChange = showUserMarker != shouldShowUserMarker
+            let didPickupMarkerChange = pickupMarker != currentPickupMarker
+            let didRoutePolylineChange = routePolyline != currentRoutePolyline
 
             currentCenter = center
             currentRadiusMeters = radiusMeters
             currentStoreMarkers = storeMarkers
             currentDriverMarkers = driverMarkers
+            shouldShowUserMarker = showUserMarker
+            currentPickupMarker = pickupMarker
+            currentRoutePolyline = routePolyline
             self.onStoreTap = onStoreTap
             self.onDriverTap = onDriverTap
             self.onMapTap = onMapTap
@@ -153,7 +178,7 @@ struct KakaoMapContainerView: UIViewRepresentable {
                 moveCameraIfNeeded()
             }
 
-            if didCenterChange || didRadiusChange || didStoreMarkersChange || didDriverMarkersChange {
+            if didCenterChange || didRadiusChange || didStoreMarkersChange || didDriverMarkersChange || didUserMarkerVisibilityChange || didPickupMarkerChange || didRoutePolylineChange {
                 renderMapObjectsIfNeeded(force: false)
             }
         }
@@ -240,6 +265,7 @@ struct KakaoMapContainerView: UIViewRepresentable {
             )
             addDriverStyleIfNeeded(map: map, styleID: taxiStyleID, assetName: "ic_taxi_marker")
             addDriverStyleIfNeeded(map: map, styleID: daeriStyleID, assetName: "ic_deari_marker")
+            addDriverStyleIfNeeded(map: map, styleID: pickupStyleID, assetName: "ic_depart_marker")
 
             let polygonStyle = PolygonStyle(
                 styles: [
@@ -253,6 +279,21 @@ struct KakaoMapContainerView: UIViewRepresentable {
             )
             let styleSet = PolygonStyleSet(styleSetID: polygonStyleID, styles: [polygonStyle])
             map.getShapeManager().addPolygonStyleSet(styleSet)
+
+            let routeStroke = PerLevelPolylineStyle(
+                bodyColor: UIColor(red: 0.91, green: 0.29, blue: 0.29, alpha: 1.0),
+                bodyWidth: 6,
+                strokeColor: UIColor.white,
+                strokeWidth: 2,
+                level: 0
+            )
+            let routePolylineStyle = PolylineStyle(styles: [routeStroke])
+            let routeStyleSet = PolylineStyleSet(
+                styleSetID: routeStyleID,
+                styles: [routePolylineStyle],
+                capType: .round
+            )
+            map.getShapeManager().addPolylineStyleSet(routeStyleSet)
         }
 
         private func configureTapHandlerIfNeeded() {
@@ -288,7 +329,10 @@ struct KakaoMapContainerView: UIViewRepresentable {
                 || currentCenter != lastRenderedCenter
                 || currentRadiusMeters != lastRenderedRadiusMeters
                 || currentStoreMarkers != lastRenderedStoreMarkers
-                || currentDriverMarkers != lastRenderedDriverMarkers else {
+                || currentDriverMarkers != lastRenderedDriverMarkers
+                || shouldShowUserMarker != lastRenderedShowUserMarker
+                || currentPickupMarker != lastRenderedPickupMarker
+                || currentRoutePolyline != lastRenderedRoutePolyline else {
                 return
             }
             renderMapObjects()
@@ -301,11 +345,20 @@ struct KakaoMapContainerView: UIViewRepresentable {
             let mapPoint = MapPoint(longitude: center.lng, latitude: center.lat)
             labelLayer.clearAllItems()
 
-            if userMarkerImage != nil {
+            if shouldShowUserMarker, userMarkerImage != nil {
                 let option = PoiOptions(styleID: poiStyleID, poiID: userPoiID)
                 option.rank = 1000
                 option.clickable = false
                 let poi = labelLayer.addPoi(option: option, at: mapPoint)
+                poi?.show()
+            }
+
+            if let pickupMarker = currentPickupMarker {
+                let option = PoiOptions(styleID: pickupStyleID, poiID: pickupPoiID)
+                option.rank = 900
+                option.clickable = false
+                let pickupPoint = MapPoint(longitude: pickupMarker.lng, latitude: pickupMarker.lat)
+                let poi = labelLayer.addPoi(option: option, at: pickupPoint)
                 poi?.show()
             }
 
@@ -347,10 +400,25 @@ struct KakaoMapContainerView: UIViewRepresentable {
             let shape = shapeLayer.addMapPolygonShape(options)
             shape?.show()
 
+            shapeLayer.removeMapPolylineShape(shapeID: routeShapeID)
+            if let routePolyline = currentRoutePolyline, routePolyline.points.count > 1 {
+                let line = routePolyline.points.map { point in
+                    MapPoint(longitude: point.lng, latitude: point.lat)
+                }
+                let mapPolyline = MapPolyline(line: line, styleIndex: 0)
+                let routeOptions = MapPolylineShapeOptions(shapeID: routeShapeID, styleID: routeStyleID, zOrder: 20)
+                routeOptions.polylines = [mapPolyline]
+                let routeShape = shapeLayer.addMapPolylineShape(routeOptions)
+                routeShape?.show()
+            }
+
             lastRenderedCenter = center
             lastRenderedRadiusMeters = currentRadiusMeters
             lastRenderedStoreMarkers = currentStoreMarkers
             lastRenderedDriverMarkers = currentDriverMarkers
+            lastRenderedShowUserMarker = shouldShowUserMarker
+            lastRenderedPickupMarker = currentPickupMarker
+            lastRenderedRoutePolyline = currentRoutePolyline
         }
 
         private func styleID(for category: String) -> String {

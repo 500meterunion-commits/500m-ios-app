@@ -52,7 +52,10 @@ struct MapTabView: View {
                     center: mapCenter,
                     radiusMeters: viewModel.radiusMeters,
                     storeMarkers: tab == .store ? filteredStores : [],
-                    driverMarkers: tab == .taxi || tab == .daeri ? viewModel.drivers : [],
+                    driverMarkers: displayedDriverMarkers,
+                    showUserMarker: !viewModel.shouldHideUserMarker,
+                    pickupMarker: viewModel.pickupLocation,
+                    routePolyline: viewModel.routePolyline,
                     onStoreTap: handleStoreTap,
                     onDriverTap: handleDriverTap,
                     onMapTap: handleMapBackgroundTap
@@ -68,11 +71,13 @@ struct MapTabView: View {
 
                 VStack {
                     Spacer()
-                    bottomSheet(
-                        maxExpandedHeight: maxExpandedSheetHeight(in: proxy),
-                        containerWidth: proxy.size.width
-                    )
-                    .padding(.bottom, 84)
+                    if !viewModel.shouldHideDriverBottomSheet {
+                        bottomSheet(
+                            maxExpandedHeight: maxExpandedSheetHeight(in: proxy),
+                            containerWidth: proxy.size.width
+                        )
+                        .padding(.bottom, 84)
+                    }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
             }
@@ -120,6 +125,13 @@ struct MapTabView: View {
                 }
             }
         }
+        .onChange(of: viewModel.driverSessionStatusText) { _, newValue in
+            guard !newValue.isEmpty else { return }
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+                isSheetExpanded = true
+                sheetDragTranslation = 0
+            }
+        }
         .alert("안내", isPresented: Binding(
             get: { viewModel.alertMessage != nil },
             set: { if !$0 { viewModel.alertMessage = nil } }
@@ -159,6 +171,9 @@ struct MapTabView: View {
         if let user = viewModel.userLocation {
             return user
         }
+        if let pickup = viewModel.pickupLocation {
+            return pickup
+        }
         if let driver = viewModel.trackedDriverLocation {
             return LatLng(lat: driver.lat, lng: driver.lng)
         }
@@ -170,6 +185,19 @@ struct MapTabView: View {
             guard let category = StoreCategoryFilter(rawValue: store.category) else { return false }
             return selectedStoreCategories.contains(category)
         }
+    }
+
+    private var displayedDriverMarkers: [DriverMarker] {
+        guard tab == .taxi || tab == .daeri else { return [] }
+        if viewModel.shouldShowDriverConsole {
+            return []
+        }
+        var markers = viewModel.drivers
+        if let matched = viewModel.matchedDriverMarker,
+           !markers.contains(where: { $0.driverId == matched.driverId }) {
+            markers.append(matched)
+        }
+        return markers
     }
 
     private var radiusOverlay: some View {
@@ -200,7 +228,7 @@ struct MapTabView: View {
 
             Spacer()
         }
-        .padding(.top, 50)
+        .padding(.top, 60)
     }
 
     private var storeCategoryRow: some View {
@@ -243,7 +271,7 @@ struct MapTabView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.top, 130)
+            .padding(.top, 140)
             .padding(.horizontal, 20)
 
             Spacer()
@@ -266,7 +294,39 @@ struct MapTabView: View {
                     .padding(.horizontal, 24)
             }
 
-            if viewModel.isLoading {
+            if viewModel.shouldShowDriverSessionSheet, let driverSessionData {
+                DriverSessionCard(
+                    data: driverSessionData,
+                    requestStatusText: viewModel.driverSessionStatusText,
+                    onClose: {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                            collapseSheet()
+                        }
+                    },
+                    onReject: {
+                        if let requestID = viewModel.activeDriverSessionRequest?.id {
+                            viewModel.rejectDriverRequest(requestID)
+                        }
+                    },
+                    onAccept: {
+                        if let requestID = viewModel.activeDriverSessionRequest?.id {
+                            viewModel.acceptDriverRequest(requestID)
+                        }
+                    },
+                    onStartRide: {
+                        if let requestID = viewModel.activeDriverSessionRequest?.id {
+                            viewModel.startRide(requestID)
+                        }
+                    },
+                    onCompleteRide: {
+                        if let requestID = viewModel.activeDriverSessionRequest?.id {
+                            viewModel.completeRide(requestID)
+                        }
+                    }
+                )
+                .padding(.top, 18)
+                .padding(.bottom, 20)
+            } else if viewModel.isLoading {
                 VStack(alignment: .leading, spacing: 24) {
                     HStack(spacing: 16) {
                         ProgressView()
@@ -393,6 +453,9 @@ struct MapTabView: View {
     }
 
     private var sheetTitle: String {
+        if viewModel.shouldShowDriverSessionSheet {
+            return "호출 정보"
+        }
         switch tab {
         case .store: return "주변 가게 목록"
         case .taxi, .daeri: return "주변 기사 목록"
@@ -401,7 +464,7 @@ struct MapTabView: View {
     }
 
     private var shouldShowSheetTitle: Bool {
-        !(isSelectedStoreSheet || isSelectedDriverSheet)
+        !(isSelectedStoreSheet || isSelectedDriverSheet || viewModel.shouldShowDriverSessionSheet)
     }
 
     private var emptyStateText: String {
@@ -454,6 +517,10 @@ struct MapTabView: View {
             return min(maxExpandedHeight, 380)
         }
 
+        if viewModel.shouldShowDriverSessionSheet {
+            return min(maxExpandedHeight, 430)
+        }
+
         let hasData = sheetItemCount > 0
         if hasData {
             return maxExpandedHeight
@@ -466,7 +533,7 @@ struct MapTabView: View {
             return baseHeight
         }
 
-        if isSelectedStoreSheet || isSelectedDriverSheet || sheetItemCount > 0 || shouldShowEmptyState {
+        if isSelectedStoreSheet || isSelectedDriverSheet || viewModel.shouldShowDriverSessionSheet || sheetItemCount > 0 || shouldShowEmptyState {
             return 34
         }
 
@@ -484,6 +551,9 @@ struct MapTabView: View {
         case .store:
             return filteredStores.count
         case .taxi, .daeri:
+            if viewModel.shouldHideDriverBottomSheet {
+                return 0
+            }
             return listItems.count
         case .mypage:
             return 0
@@ -537,6 +607,7 @@ struct MapTabView: View {
     }
 
     private func handleMapBackgroundTap() {
+        guard !viewModel.shouldShowDriverSessionSheet else { return }
         withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
             collapseSheet()
         }
@@ -635,6 +706,71 @@ struct MapTabView: View {
         )
     }
 
+    private var driverSessionData: DriverSessionCardData? {
+        guard (tab == .taxi || tab == .daeri),
+              let request = viewModel.activeDriverSessionRequest else {
+            return nil
+        }
+
+        let name = viewModel.driverSessionName
+        let memo: String
+        let profileImageURL: String?
+        let detailTitle: String
+        let detailValue: String
+        let detailValueColor: Color
+
+        switch viewModel.selectedPartnerInfo {
+        case let .taxi(info):
+            memo = info.memo?.nilIfBlank ?? "안전하고 신속하게 이동 중입니다."
+            profileImageURL = info.photoURL?.nilIfBlank
+            detailTitle = "자동차 번호"
+            detailValue = info.carNumber?.nilIfBlank ?? "—"
+            detailValueColor = brandRed
+        case let .daeri(info):
+            memo = info.memo?.nilIfBlank ?? "안전하고 신속하게 이동 중입니다."
+            profileImageURL = info.photoURL?.nilIfBlank
+            detailTitle = "보험 가입 여부"
+            let joined = info.insuranceSubscribed == true
+            detailValue = joined ? "가입완료" : "미가입"
+            detailValueColor = joined ? brandRed : textDark
+        case .store, .none:
+            memo = "안전하고 신속하게 이동 중입니다."
+            profileImageURL = nil
+            if tab == .taxi {
+                let marker = viewModel.drivers.first(where: { $0.driverId == request.driverId })
+                detailTitle = "자동차 번호"
+                detailValue = marker?.carNumber?.nilIfBlank ?? "—"
+                detailValueColor = brandRed
+            } else {
+                let marker = viewModel.drivers.first(where: { $0.driverId == request.driverId })
+                let joined = marker?.insuranceSubscribed == true
+                detailTitle = "보험 가입 여부"
+                detailValue = joined ? "가입완료" : "미가입"
+                detailValueColor = joined ? brandRed : textDark
+            }
+        }
+
+        let distanceText: String
+        if let pickup = viewModel.pickupLocation, let userLocation = viewModel.userLocation {
+            let meters = Int(GeoMath.haversineMeters(userLocation.lat, userLocation.lng, pickup.lat, pickup.lng))
+            distanceText = "\(meters)m 이내"
+        } else {
+            distanceText = "확인 중"
+        }
+
+        return DriverSessionCardData(
+            name: name,
+            memo: memo,
+            profileImageURL: profileImageURL,
+            etaText: viewModel.routeEtaText,
+            distanceText: distanceText,
+            detailValue: detailValue,
+            detailTitle: detailTitle,
+            detailValueColor: detailValueColor,
+            status: request.status
+        )
+    }
+
     private var isSelectedStoreSheet: Bool {
         tab == .store && selectedStoreCard != nil
     }
@@ -644,7 +780,7 @@ struct MapTabView: View {
     }
 
     private var selectedPartnerCardVisible: Bool {
-        isSelectedStoreSheet || isSelectedDriverSheet
+        isSelectedStoreSheet || isSelectedDriverSheet || viewModel.shouldShowDriverSessionSheet
     }
 
     private var storeListCards: [StoreMarker] {
@@ -698,6 +834,18 @@ private struct DriverSelectedCardData {
     let carNumber: String?
     let insuranceJoined: Bool?
     let isTaxi: Bool
+}
+
+private struct DriverSessionCardData {
+    let name: String
+    let memo: String
+    let profileImageURL: String?
+    let etaText: String
+    let distanceText: String
+    let detailValue: String
+    let detailTitle: String
+    let detailValueColor: Color
+    let status: MatchRequestStatus
 }
 
 private struct DriverListRow: View {
@@ -860,6 +1008,238 @@ private struct DriverSelectedCard: View {
         .padding(.horizontal, 20)
         .padding(.top, 18)
         .padding(.bottom, 20)
+    }
+}
+
+private struct DriverSessionCard: View {
+    let data: DriverSessionCardData
+    let requestStatusText: String
+    let onClose: () -> Void
+    let onReject: () -> Void
+    let onAccept: () -> Void
+    let onStartRide: () -> Void
+    let onCompleteRide: () -> Void
+
+    private let brandRed = Color(red: 0.91, green: 0.29, blue: 0.29)
+    private let textDark = Color(red: 0.07, green: 0.09, blue: 0.14)
+    private let textMuted = Color(red: 0.60, green: 0.65, blue: 0.73)
+    private let green = Color(red: 0.19, green: 0.77, blue: 0.42)
+
+    var body: some View {
+        Group {
+            switch data.status {
+            case .pending:
+                pendingCard
+            case .accepted, .inProgress:
+                activeRideCard
+            case .completed, .rejected, .canceled, .expired:
+                EmptyView()
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        switch data.status {
+        case .pending:
+            HStack(spacing: 14) {
+                sessionButton(title: "거절", fill: Color(red: 0.38, green: 0.42, blue: 0.48), action: onReject)
+                sessionButton(title: "수락", fill: brandRed, action: onAccept)
+            }
+        case .accepted:
+            sessionButton(title: "운행 시작", fill: brandRed, action: onStartRide)
+        case .inProgress:
+            sessionButton(title: "운행 완료", fill: brandRed, action: onCompleteRide)
+        case .completed, .rejected, .canceled, .expired:
+            EmptyView()
+        }
+    }
+
+    private func sessionButton(title: String, fill: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 18, weight: .heavy))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 62)
+                .background(fill, in: RoundedRectangle(cornerRadius: 28))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var pendingCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "bell.fill")
+                    .font(.system(size: 18, weight: .bold))
+                Text("서비스 요청 알림")
+                    .font(.system(size: 18, weight: .heavy))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 22)
+            .frame(height: 58)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(brandRed)
+
+            VStack(alignment: .leading, spacing: 22) {
+                headerSection
+
+                HStack(spacing: 0) {
+                    MetricColumn(title: "도착 예상", value: data.etaText, valueColor: textDark)
+
+                    Divider()
+                        .frame(height: 56)
+
+                    MetricColumn(title: data.detailTitle, value: data.detailValue, valueColor: data.detailValueColor)
+
+                    Divider()
+                        .frame(height: 56)
+
+                    MetricColumn(title: "현재 위치", value: data.distanceText, valueColor: textDark)
+                }
+
+                HStack(spacing: 14) {
+                    sessionButton(title: "거절하기", fill: Color(red: 0.38, green: 0.42, blue: 0.48), action: onReject)
+                    sessionButton(title: "수락하기", fill: brandRed, action: onAccept)
+                }
+            }
+            .padding(22)
+        }
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 28))
+        .shadow(color: .black.opacity(0.08), radius: 14, y: 8)
+    }
+
+    private var activeRideCard: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(requestStatusText)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(brandRed)
+                    Text(data.name)
+                        .font(.system(size: 30, weight: .heavy))
+                        .foregroundStyle(textDark)
+                }
+
+                Spacer()
+
+                statusBadge
+            }
+
+            HStack(spacing: 14) {
+                activeMetricCard(title: "픽업 거리", value: data.distanceText, valueColor: textDark)
+                activeMetricCard(title: data.status == .accepted ? "예상 소요 시간" : data.detailTitle, value: data.status == .accepted ? data.etaText : data.detailValue, valueColor: data.status == .accepted ? brandRed : data.detailValueColor)
+            }
+
+            HStack(spacing: 14) {
+                Button(action: onClose) {
+                    Text("닫기")
+                        .font(.system(size: 18, weight: .heavy))
+                        .foregroundStyle(Color(red: 0.29, green: 0.33, blue: 0.39))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 62)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 28))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 28)
+                                .stroke(Color(red: 0.84, green: 0.87, blue: 0.91), lineWidth: 2)
+                        }
+                }
+                .buttonStyle(.plain)
+
+                if data.status == .accepted {
+                    sessionButton(title: "운행 시작", fill: brandRed, action: onStartRide)
+                } else if data.status == .inProgress {
+                    sessionButton(title: "운행 완료", fill: brandRed, action: onCompleteRide)
+                }
+            }
+        }
+        .padding(22)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 28))
+        .shadow(color: .black.opacity(0.08), radius: 14, y: 8)
+    }
+
+    private var headerSection: some View {
+        HStack(alignment: .top, spacing: 16) {
+            ZStack(alignment: .bottomTrailing) {
+                Group {
+                    if let urlString = data.profileImageURL,
+                       let url = URL(string: urlString) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case let .success(image):
+                                image.resizable().scaledToFill()
+                            default:
+                                Image("ic_profile_placeholder")
+                                    .resizable()
+                                    .scaledToFill()
+                            }
+                        }
+                    } else {
+                        Image("ic_profile_placeholder")
+                            .resizable()
+                            .scaledToFill()
+                    }
+                }
+                .frame(width: 74, height: 74)
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+
+                Circle()
+                    .fill(.white)
+                    .frame(width: 22, height: 22)
+                    .overlay {
+                        Circle()
+                            .fill(green)
+                            .padding(3)
+                    }
+                    .offset(x: 5, y: 5)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(data.name)
+                    .font(.system(size: 28, weight: .heavy))
+                    .foregroundStyle(textDark)
+
+                Text(requestStatusText)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(brandRed)
+
+                Text(data.memo)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(textMuted)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var statusBadge: some View {
+        Text(data.status == .accepted ? "픽업 이동" : "운행 중")
+            .font(.system(size: 14, weight: .heavy))
+            .foregroundStyle(brandRed)
+            .padding(.horizontal, 16)
+            .frame(height: 38)
+            .background(brandRed.opacity(0.12), in: Capsule())
+    }
+
+    private func activeMetricCard(title: String, value: String, valueColor: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(textMuted)
+
+            Text(value)
+                .font(.system(size: 24, weight: .heavy))
+                .foregroundStyle(valueColor)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 18)
+        .frame(height: 98)
+        .background(Color(red: 0.97, green: 0.98, blue: 0.99), in: RoundedRectangle(cornerRadius: 24))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24)
+                .stroke(Color(red: 0.94, green: 0.95, blue: 0.97), lineWidth: 1)
+        }
     }
 }
 
