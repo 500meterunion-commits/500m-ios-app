@@ -350,6 +350,7 @@ struct MapTabView: View {
 
     private func bottomSheet(maxExpandedHeight: CGFloat, containerWidth: CGFloat) -> some View {
         let baseHeight = sheetBaseHeight(maxExpandedHeight: maxExpandedHeight)
+        let contentWidth = max(0, containerWidth - 40)
         let collapsedVisibleHeight = collapsedSheetVisibleHeight(baseHeight: baseHeight)
         let maxCollapsedOffset = max(0, baseHeight - collapsedVisibleHeight)
         let restingOffset: CGFloat = isSheetExpanded ? 0 : maxCollapsedOffset
@@ -487,11 +488,12 @@ struct MapTabView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 20)
+                    .frame(width: contentWidth)
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.top, 18)
                     .padding(.bottom, 20)
-                    .frame(maxWidth: .infinity)
                 }
+                .frame(maxWidth: .infinity)
             }
         }
         .frame(width: containerWidth)
@@ -1861,23 +1863,27 @@ private struct StoreBottomCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Group {
-                if let urlString = store.promoImageURL?.nilIfBlank,
-                   let url = URL(string: urlString) {
-                    CachedRemoteImage(url: url) { image in
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } placeholder: {
+            GeometryReader { proxy in
+                Group {
+                    if let urlString = store.promoImageURL?.nilIfBlank,
+                       let url = URL(string: urlString) {
+                        CachedRemoteImage(url: url) { image in
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        } placeholder: {
+                            Image("ic_store_promo_placeholder")
+                                .resizable()
+                                .scaledToFill()
+                        }
+                    } else {
                         Image("ic_store_promo_placeholder")
                             .resizable()
                             .scaledToFill()
                     }
-                } else {
-                    Image("ic_store_promo_placeholder")
-                        .resizable()
-                        .scaledToFill()
                 }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipped()
             }
             .frame(height: 190)
             .clipShape(RoundedRectangle(cornerRadius: 22))
@@ -1927,6 +1933,27 @@ private struct StoreBottomCard: View {
         .contentShape(RoundedRectangle(cornerRadius: 28))
         .onTapGesture(perform: onTap)
     }
+}
+
+#Preview("우리동네 가게 카드") {
+    StoreBottomCard(
+        store: StoreMarker(
+            storeId: "preview-store",
+            kakaoStoreRegId: "preview-kakao-store",
+            category: "FOOD",
+            lat: 37.5665,
+            lng: 126.9780,
+            storeName: "부원냉삼집 거제레이카운티점",
+            promoImageURL: nil,
+            promoText: "안녕"
+        ),
+        distanceText: "238m 이내",
+        onTap: {},
+        onMoreTap: {}
+    )
+    .padding(.horizontal, 20)
+    .padding(.vertical, 24)
+    .background(Color(red: 0.97, green: 0.98, blue: 0.99))
 }
 
 private struct TopRoundedRectangle: Shape {
